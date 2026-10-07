@@ -1,0 +1,232 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <!-- COMPONENT_STYLES -->
+    <style>
+      :root {
+        --font-stack: Inter, system-ui, sans-serif;
+        --blue: var(--figma-color-bg-brand, #0d99ff);
+        --black: var(--figma-color-text, #1e1e1e);
+        --black8: var(--figma-color-text, #1e1e1e);
+        --black3: var(--figma-color-text-disabled, #b3b3b3);
+        --black1: var(--figma-color-border, #e6e6e6);
+        --white: var(--figma-color-bg, #fff);
+        --hover-fill: var(--figma-color-bg-hover, #f5f5f5);
+        --border-radius-large: 4px;
+        font: 11px/16px var(--font-stack);
+        color: var(--black);
+        background: var(--white);
+      }
+      body {
+        font: inherit;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      button,
+      input {
+        font-family: inherit;
+      }
+      button {
+        cursor: default;
+      }
+      button:focus-visible,
+      .card:focus-within {
+        outline: 2px solid var(--figma-color-border-selected, #0d99ff);
+        outline-offset: 2px;
+      }
+      .button {
+        justify-content: center;
+      }
+      .button--primary {
+        color: var(--figma-color-text-onbrand, #fff);
+      }
+      .button--primary:disabled {
+        background: var(--figma-color-bg-disabled, #e6e6e6);
+        color: var(--figma-color-text-disabled, #b3b3b3);
+      }
+      .button--secondary {
+        color: var(--black);
+        background: transparent;
+        border: 1px solid var(--black1);
+      }
+      .button--secondary:enabled:hover,
+      .button--tertiary:enabled:hover {
+        background: var(--hover-fill);
+      }
+      .button--tertiary {
+        color: var(--black);
+        padding: 0 8px;
+      }
+      .button--tertiary:disabled {
+        color: var(--black3);
+      }
+      h1,
+      h2 {
+        font-size: 11px;
+        line-height: 16px;
+        font-weight: 600;
+        margin: 0;
+      }
+      main {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 16px;
+      }
+      #settings {
+        padding-bottom: 16px;
+        margin-bottom: 16px;
+        border-bottom: 1px solid var(--black1);
+      }
+      label.field-label {
+        display: block;
+        margin-bottom: 8px;
+      }
+      .input__field {
+        background: var(--figma-color-bg-secondary, #f5f5f5);
+        border: 1px solid var(--black1);
+        font-family: inherit;
+      }
+      #settings .button {
+        margin-top: 12px;
+      }
+      .help {
+        color: var(--figma-color-text-secondary, #757575);
+        margin: 8px 0 0;
+        overflow-wrap: anywhere;
+      }
+      #status {
+        color: var(--figma-color-text-secondary, #757575);
+        margin-top: 12px;
+      }
+      #status:empty {
+        display: none;
+      }
+      #status[data-error="true"] {
+        color: var(--figma-color-text-danger, #dc3412);
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 0 0 8px;
+        min-height: 24px;
+      }
+      .toolbar .button {
+        height: 24px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .card.checkbox {
+        display: block;
+        position: relative;
+        height: auto;
+        min-width: 0;
+        border: 1px solid var(--black1);
+        border-radius: 4px;
+        overflow: hidden;
+        background: var(--white);
+      }
+      .card:has(:checked) {
+        border-color: var(--figma-color-border-selected, #0d99ff);
+        box-shadow: inset 0 0 0 1px var(--figma-color-border-selected, #0d99ff);
+      }
+      .card .checkbox__box {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+      }
+      .card .checkbox__label {
+        display: block;
+        margin: 0;
+        padding: 0;
+        height: auto;
+        color: var(--black);
+      }
+      .card .checkbox__label:before {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        margin: 0;
+        width: 12px;
+        height: 12px;
+        background-color: var(--white);
+        border-color: var(--figma-color-border-strong, #8a8a8a);
+      }
+      .card .checkbox__box:checked + .checkbox__label:before {
+        background-color: var(--blue);
+        border-color: var(--blue);
+        background-position: center;
+      }
+      .card img {
+        display: block;
+        width: 100%;
+        height: 222px;
+        object-fit: contain;
+        background: var(--figma-color-bg-secondary, #f5f5f5);
+      }
+      .empty {
+        color: var(--figma-color-text-secondary, #757575);
+        text-align: center;
+        padding: 40px 16px;
+      }
+      footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 16px;
+        border-top: 1px solid var(--black1);
+        flex-shrink: 0;
+      }
+      #selection-count {
+        color: var(--figma-color-text-secondary, #757575);
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section id="settings" hidden>
+        <label class="field-label" for="token">Team access key</label>
+        <div class="input">
+          <input
+            id="token"
+            class="input__field"
+            type="password"
+            autocomplete="off"
+            placeholder="Access key"
+          />
+        </div>
+        <p class="help">Service: <span id="endpoint"></span></p>
+        <p class="help">Saved on this device for future use.</p>
+        <button id="connect" class="button button--secondary">Connect</button>
+      </section>
+      <div id="status" role="status" aria-live="polite"></div>
+      <div id="results-toolbar" class="toolbar" hidden>
+        <h2 id="results-title">Results</h2>
+        <button id="clear" class="button button--tertiary" disabled>
+          Clear selection
+        </button>
+      </div>
+      <div id="grid" class="grid" aria-label="Image results"></div>
+      <div id="empty" class="empty">Select an image or one or more text layers in Figma to find images.</div>
+    </main>
+    <footer>
+      <span id="selection-count" aria-live="polite">0 selected</span
+      ><button id="insert" class="button button--primary" disabled>
+        Insert images
+      </button>
+    </footer>
+    <!-- SCRIPT -->
+  </body>
+</html>

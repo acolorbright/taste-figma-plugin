@@ -1,0 +1,30 @@
+app = "taste-figma-search"
+primary_region = "fra"
+kill_signal = "SIGTERM"
+kill_timeout = 30
+
+[build]
+  dockerfile = "Dockerfile.fly"
+
+[env]
+  TASTE_LIBRARY_PATH = "/app/library"
+  TASTE_CPU_THREADS = "2"
+
+[http_service]
+  internal_port = 8765
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "60s"
+    method = "GET"
+    path = "/ready"
+
+[[vm]]
+  cpu_kind = "performance"
+  cpus = 2
+  memory = "4gb"

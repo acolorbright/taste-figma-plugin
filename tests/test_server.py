@@ -1,0 +1,216 @@
+import io
+import json
+import numpy as np
+import pytest
+from PIL import Image
+from fastapi.testclient import TestClient
+from server.app import create_app
+from server.search import Library, normalize, read_image
+
+KEY = "test-key-that-is-long-enough-for-tests"
+AUTH = {"Authorization": f"Bearer {KEY}"}
+
+
+class Encoder:
+    def text(self, texts):
+        return np.eye(1, 512, dtype=np.float32)[0]
+
+    def image(self, data):
+        read_image(data)
+        return self.text([])
+
+
+@pytest.fixture
+def library(tmp_path):
+    (tmp_path / "images").mkdir()
+    for name in ["one.png", "two.png"]:
+        Image.new("RGB", (30, 15), "red").save(tmp_path / "images" / name)
+    refs = [
+        {"id": "one", "file": "one.png"},
+        {"id": "two", "file": "two.png"},
+        {"id": "escape", "file": "../../secret.png"},
+    ]
+    (tmp_path / "references.json").write_text(json.dumps(refs))
+    a = [1.0] + [0.0] * 511
+    b = [0.0, 1.0] + [0.0] * 510
+    (tmp_path / "embeddings.json").write_text(json.dumps({"one.png": a, "two.png": b}))
+    return Library(tmp_path)
+
+
+@pytest.fixture
+def client(library):
+    with TestClient(create_app(library, Encoder(), KEY)) as client:
+        yield client
+
+
+def test_authentication_on_every_route(client):
+    for method, path, kwargs in [
+        ("get", "/health", {}),
+        ("get", "/images/one", {}),
+        ("post", "/search/text", {"json": {"texts": ["bold"]}}),
+        ("post", "/search/image", {"files": {"image": ("a.png", b"bad", "image/png")}}),
+    ]:
+        assert getattr(client, method)(path, **kwargs).status_code == 401
+    assert client.get("/health", headers=AUTH).json()["count"] == 2
+
+
+def test_text_search_and_limits(client):
+    response = client.post(
+        "/search/text", headers=AUTH, json={"texts": ["bold", "editorial"], "limit": 1}
+    )
+    assert response.status_code == 200
+    assert response.json()["results"][0]["id"] == "one"
+    for texts in [[], ["  "], ["x" * 12001], ["word"] * 51]:
+        assert (
+            client.post("/search/text", headers=AUTH, json={"texts": texts}).status_code
+            == 422
+        )
+
+
+def test_image_search_and_bad_images(client):
+    data = io.BytesIO()
+    Image.new("RGB", (32, 32), "blue").save(data, format="PNG")
+    result = client.post(
+        "/search/image",
+        headers=AUTH,
+        files={"image": ("a.png", data.getvalue(), "image/png")},
+    )
+    assert result.status_code == 200
+    assert result.json()["results"][0]["id"] == "one"
+    assert (
+        client.post(
+            "/search/image",
+            headers=AUTH,
+            files={"image": ("a.png", b"invalid", "image/png")},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/search/image",
+            headers=AUTH,
+            files={"image": ("a.png", b"x" * (8 * 1024 * 1024 + 1), "image/png")},
+        ).status_code
+        == 413
+    )
+
+
+def test_images_are_bounded_and_use_ids_not_paths(client):
+    response = client.get("/images/one?size=32", headers=AUTH)
+    assert response.status_code == 200
+    assert Image.open(io.BytesIO(response.content)).size == (30, 15)
+    assert response.headers["cache-control"] == "no-store"
+    assert client.get("/images/escape", headers=AUTH).status_code == 404
+    assert client.get("/images/one?size=5000", headers=AUTH).status_code == 422
+
+
+def test_image_search_excludes_source_without_dropping_unrelated_first_match(client, library):
+    data = io.BytesIO()
+    Image.new("RGB", (32, 32), "red").save(data, format="PNG")
+    response = client.post(
+        "/search/image", headers=AUTH,
+        files={"image": ("a.png", data.getvalue(), "image/png")},
+        data={"exclude_id": "one"},
+    )
+    assert response.status_code == 200
+    assert [r["id"] for r in response.json()["results"]] == ["two"]
+    vector = [1.0] + [0.0] * 511
+    assert library.rank(vector, 1, exclude_id="one")[0]["id"] == "two"
+    assert library.rank(vector, 1, exclude_id="unknown")[0]["id"] == "one"
+
+
+def test_cors_for_opaque_figma_origin(client):
+    response = client.options(
+        "/search/text",
+        headers={
+            "Origin": "null",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+            "Access-Control-Request-Private-Network": "true",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert response.headers["access-control-allow-private-network"] == "true"
+
+
+def test_invalid_vectors_rejected_and_rank_is_cosine(library):
+    for vector in [[1, 2], [0.0] * 512, [float("nan")] * 512]:
+        with pytest.raises(ValueError):
+            normalize(vector)
+    assert library.rank([20.0] + [0.0] * 511, 1)[0]["id"] == "one"
+
+
+def test_fail_closed_without_token():
+    with pytest.raises(RuntimeError):
+        create_app(token="")
+
+
+def test_long_text_keeps_all_tokens_across_clip_windows():
+    import threading
+    import torch
+    from server.search import Encoder as ClipEncoder
+
+    class Tokenizer:
+        sot_token_id = 9001
+        eot_token_id = 9002
+
+        def encode(self, text):
+            return list(range(1, int(text) + 1))
+
+    class Model:
+        context_length = 77
+        seen = []
+
+        def encode_text(self, batch):
+            self.seen.extend(batch.tolist())
+            return torch.ones((len(batch), 512))
+
+    encoder = ClipEncoder.__new__(ClipEncoder)
+    encoder.torch = torch
+    encoder.device = "cpu"
+    encoder.model = Model()
+    encoder.tokenizer = Tokenizer()
+    encoder.lock = threading.Lock()
+    assert encoder.text(["160"]).shape == (512,)
+    seen = [token for row in encoder.model.seen for token in row if 0 < token < 9001]
+    assert seen == list(range(1, 161))
+    assert len(encoder.model.seen) == 3
+
+
+def test_reference_search_uses_index_and_excludes_source(client):
+    result = client.post('/search/reference', headers=AUTH, json={'id': 'one'})
+    assert result.status_code == 200
+    assert [r['id'] for r in result.json()['results']] == ['two']
+    assert client.post('/search/reference', json={'id': 'one'}).status_code == 401
+    assert client.post('/search/reference', headers=AUTH, json={'id': 'missing'}).status_code == 404
+    assert client.get('/ready').json() == {'status': 'ok'}
+
+
+def test_hosted_library_works_without_local_images(library):
+    root = library.root
+    refs = json.loads((root / 'references.json').read_text())[:2]
+    refs[0]['url'] = 'https://example.public.blob.vercel-storage.com/one.png'
+    refs[1]['url'] = 'http://localhost/private'
+    (root / 'references.json').write_text(json.dumps(refs))
+    for file in (root / 'images').iterdir():
+        file.unlink()
+    hosted = Library(root)
+    assert [r['id'] for r in hosted.refs] == ['one']
+    assert hosted.reference_vector('one').shape == (512,)
+
+
+def test_simultaneous_team_queries_wait_instead_of_failing(library):
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    class SlowEncoder(Encoder):
+        def text(self, texts):
+            time.sleep(0.2)
+            return super().text(texts)
+
+    with TestClient(create_app(library, SlowEncoder(), KEY)) as client:
+        def query(_):
+            return client.post('/search/text', headers=AUTH, json={'texts': ['test']}).status_code
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            assert list(pool.map(query, range(3))) == [200, 200, 200]

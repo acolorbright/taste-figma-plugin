@@ -1,0 +1,7 @@
+*
+!server/
+!server/**
+server/__pycache__/
+!Dockerfile.fly
+!deploy-data/
+!deploy-data/**

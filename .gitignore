@@ -1,0 +1,16 @@
+node_modules/
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+.env.*
+!.env.example
+dist/
+*.zip
+.taste-access-key
+deploy-data/
+
+.taste-fly-access-key
+
+.DS_Store
+output/
