@@ -14,7 +14,7 @@ You need the **Figma desktop app** and the **team access key**. Ask Sven for the
 4. Run **Plugins → Development → Taste — image search**.
 5. **Paste the team access key and click Connect.** You only need to do this once per device; the plugin remembers it.
 
-The download is private. Sign in to GitHub with an account that has access to this repository. If the link shows a 404, ask Sven for access or for the ZIP directly. On the [releases page](https://github.com/acolorbright/taste-figma-plugin/releases/latest), choose **`taste-figma-plugin.zip`** under Assets, not “Source code”.
+The download is public; no GitHub account is needed. Searching the team library still requires the team access key, which is not included in the download. On the [releases page](https://github.com/acolorbright/taste-figma-plugin/releases/latest), choose **`taste-figma-plugin.zip`** under Assets, not “Source code”.
 
 ## Use it
 
