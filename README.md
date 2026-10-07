@@ -1,8 +1,47 @@
-# Taste for Figma
+# Taste for Figma and FigJam
 
-Private Figma plugin: select an image to find visually similar references, or select one or more text layers to find relevant images. Choose multiple results and add them as image layers directly on the canvas beside the source. Insertion preserves image aspect ratios and can be undone in Figma.
+Find images from the team's Taste library by selecting an image, text layers, or FigJam sticky notes.
 
-The search service reads the original **Taste** library (`references.json`, `embeddings.json`, and `images/`) and uses its exact CLIP model: **OpenCLIP ViT-B-32, OpenAI weights, 512 dimensions**. It does not use taste-web’s separate OpenAI text-embedding index. Existing library files are read-only. No database migration or paid inference API is needed.
+## Install — for designers
+
+**[Download the latest plugin ZIP](https://github.com/acolorbright/taste-figma-plugin/releases/latest/download/taste-figma-plugin.zip)**
+
+You need the **Figma desktop app** and the **team access key**. Ask Sven for the key. No coding, terminal commands, or local server setup is needed.
+
+1. **Download and unzip** `taste-figma-plugin.zip`. Keep the extracted folder somewhere permanent, such as `Documents/Taste plugin`.
+2. **Open a Figma Design or FigJam file** in the desktop app.
+3. In the Figma menu, choose **Plugins → Development → Import plugin from manifest**. Select **`manifest.json` inside the extracted folder**.
+4. Run **Plugins → Development → Taste — image search**.
+5. **Paste the team access key and click Connect.** You only need to do this once per device; the plugin remembers it.
+
+The download is private. Sign in to GitHub with an account that has access to this repository. If the link shows a 404, ask Sven for access or for the ZIP directly. On the [releases page](https://github.com/acolorbright/taste-figma-plugin/releases/latest), choose **`taste-figma-plugin.zip`** under Assets, not “Source code”.
+
+## Use it
+
+- Select **one image** to find visually similar images.
+- Select **one or more text layers or FigJam sticky notes** to find images based on their contents. Multiple texts are searched together.
+- Search starts automatically. Tick the images you want, then click **Insert images**. You can select and insert each result as soon as its preview loads.
+
+Images are placed directly on the canvas. Inserting one image selects it and starts a new similarity search, excluding that same Taste reference.
+
+## Update the plugin
+
+Close the plugin, [download the latest ZIP](https://github.com/acolorbright/taste-figma-plugin/releases/latest/download/taste-figma-plugin.zip), and replace the files in the folder you originally imported. Then reopen the plugin. If you moved that folder, import its `manifest.json` again.
+
+## If something isn't working
+
+- **Plugin doesn't appear:** use the desktop app and import `manifest.json`, not the ZIP.
+- **Access key not accepted:** ask Sven for the current team key and reconnect.
+- **Cannot reach Taste:** check your internet connection; if it persists, let Sven know.
+- **No search starts:** select one image, or text/sticky notes containing words. Multiple images and mixed image/text selections aren't supported.
+
+---
+
+## Developer and hosting notes
+
+The default build connects to the team's hosted Fly.io service. The sections below are for maintaining the plugin; colleagues installing it can stop here.
+
+Search uses **OpenCLIP ViT-B-32, OpenAI weights, 512 dimensions**, matching the original Taste library. It does not use Taste Web's separate OpenAI text-embedding index. The hosted service uses a CLIP index snapshot and existing Vercel Blob image URLs.
 
 ## Run locally
 
@@ -10,7 +49,7 @@ Requires Node.js 22+, Python 3.12+ and the Taste image library. On this machine 
 
 ```sh
 npm ci
-npm run build
+TASTE_API_URL=http://localhost:8765 npm run build
 python3 -m venv .venv
 .venv/bin/python -m pip install -r server/requirements.txt
 .venv/bin/python -m server.run --library /Users/se/Sites/taste/library
@@ -20,21 +59,13 @@ The first launch may download CLIP model weights. The service binds to `127.0.0.
 
 The default plugin build now connects to the hosted Fly service. For local development, build with `TASTE_API_URL=http://localhost:8765 npm run package`.
 
-### Install in Figma Desktop
-
-1. Open a Figma Design or FigJam file.
-2. Go to **Plugins → Development → Import plugin from manifest** and choose `dist/manifest.json`.
-3. Select one layer with a visible image fill, or one or more text layers. FigJam sticky notes, shapes with text, and text inside frames, groups, components, and instances are also supported; hidden text is skipped.
-4. Run **Taste — image search** from Development, enter the hosted team access key (or the local key for a local build), and connect.
-5. Selecting an image or text layers starts a search automatically after a 300 ms pause, including when connecting with layers already selected. Select results, then **Insert images**.
-
 Images are exported as seen, including crops and transforms. Mixed text/image selections and multiple images are deliberately rejected. Text layers are combined into a token-weighted CLIP query; long text is split into chunks so later words are not silently discarded. For best results use descriptive English phrases; CLIP is a visual matching model rather than a reasoning model.
 
 Results are placed directly on the current page as image layers, beside the source’s containing frame. This avoids hiding new images inside clipped frames or changing auto-layout. Images use a three-column grid, 320 px wide, with original proportions. Inserted images become selected; a single inserted image automatically starts a similarity search. Original selection layers are left in place. Switching pages before insertion requires returning to the original page or searching again.
 
 ## Share privately with the team
 
-**Option A: development distribution.** Share the contents of `dist/` or `taste-figma-plugin.zip` privately. Each teammate imports its manifest in Figma Desktop. With the local build, each teammate also runs the search service with a local copy of the Taste library.
+**Option A: development distribution.** Share the contents of `dist/` or `taste-figma-plugin.zip` privately. Each teammate imports its manifest in Figma Desktop. The default hosted build needs no local server. A deliberately configured local build requires a local search service.
 
 **Option B: one team service and an internal organization plugin.**
 
@@ -61,7 +92,7 @@ docker run --rm -p 127.0.0.1:8765:8765 \
   taste-search
 ```
 
-Provide HTTPS through your existing reverse proxy. Keep one worker per container to avoid loading duplicate models. Allow up to 90 seconds for searches, configure request limits at the proxy, and keep this service private to the team. The service rejects simultaneous inference requests with HTTP 429 rather than building an unbounded queue. Restart it after updating the library index.
+Provide HTTPS through your existing reverse proxy. Keep one worker per container to avoid loading duplicate models. Allow up to 90 seconds for searches, configure request limits at the proxy, and keep this service private to the team. The service queues simultaneous inference requests for up to 10 seconds, then returns HTTP 429 if it is still busy. Restart it after updating the library index.
 
 The shared bearer key grants access to the full reference library. Rotate `TASTE_API_TOKEN` to revoke it. This first version does not implement individual user accounts, SSO, or per-user revocation. Uploaded selection images/text are processed in memory and not persisted or sent to third-party inference APIs. Authenticated downloads are re-encoded JPEGs, with a 4096-pixel maximum; GIF references use their first frame and transparent images use a white background.
 
