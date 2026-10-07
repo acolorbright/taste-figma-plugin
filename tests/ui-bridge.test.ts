@@ -12,7 +12,7 @@ const compiled = await build({
   define: { __API_URL__: JSON.stringify("http://localhost:8765") },
 });
 
-function panel(fetchResponse?: (url: string, init: any) => Promise<any>) {
+function panel(fetchResponse?: (url: string, init: any) => Promise<any>, cryptoProvider: any = webcrypto) {
   const elements = new Map<string, any>();
   const outgoing: any[] = [];
   const connections: any[] = [];
@@ -40,7 +40,7 @@ function panel(fetchResponse?: (url: string, init: any) => Promise<any>) {
     parent,
     document: { getElementById: element, querySelectorAll: checkboxes, createElement: makeElement },
     console,
-    crypto: webcrypto,
+    crypto: cryptoProvider,
     DOMException,
     AbortSignal,
     AbortController,
@@ -352,4 +352,31 @@ test("usage network failure never prevents connection or exposes content", async
   const saved=p.connections.find(m=>m.pluginMessage.type==='save-installation');
   assert.match(saved.pluginMessage.id,/^[a-f0-9-]{36}$/);
   assert.equal(p.element('status').dataset.error,'false');
+});
+
+
+test("Figma sandbox without randomUUID can connect and search", async () => {
+  const p = panel(undefined, {getRandomValues: webcrypto.getRandomValues.bind(webcrypto)});
+  assert.doesNotThrow(() => p.window.onmessage({data:{pluginMessage:{type:"connection",key:"saved-key"}}}));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(p.element("settings").hidden,true);
+  const saved = p.connections.find(m=>m.pluginMessage.type==="save-installation");
+  assert.match(saved.pluginMessage.id,/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+  select(p,"text"); p.tick();
+  assert.equal(p.outgoing.at(-1).pluginMessage.type,"query");
+  assert.doesNotThrow(() => p.window.onmessage({data:{pluginMessage:{type:"inserted",count:1}}}));
+});
+
+test("unavailable crypto only disables client counts, never plugin startup", async () => {
+  for (const cryptoProvider of [null, {getRandomValues(){throw new Error("unavailable")}}]) {
+    const p=panel(undefined,cryptoProvider);
+    assert.doesNotThrow(() => p.window.onmessage({data:{pluginMessage:{type:"connection",key:""}}}));
+    assert.equal(p.element("settings").hidden,false);
+    p.element("token").value="test-key";
+    await p.element("connect").onclick();
+    assert.equal(p.element("settings").hidden,true);
+    select(p,"image");p.tick();
+    assert.equal(p.outgoing.at(-1).pluginMessage.type,"query");
+    assert.equal(p.requests.filter(r=>r.url.endsWith("/usage/events")).length,0);
+  }
 });

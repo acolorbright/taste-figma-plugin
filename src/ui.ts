@@ -129,13 +129,29 @@ async function ready(signal = AbortSignal.timeout(120000)) {
     el("status").hidden = false;
   }
 }
+// Figma's sandbox may expose getRandomValues without the secure-context-only
+// randomUUID API. Analytics must never prevent the plugin from starting.
+function usageId(): string {
+  try {
+    if (typeof crypto === "undefined" || !crypto) return "";
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 15) | 64;
+    bytes[8] = (bytes[8] & 63) | 128;
+    const hex = Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+  } catch {
+    return "";
+  }
+}
 function trackUsage(kind: "open" | "insert", count = 1) {
   if (!key || !installationId) return;
+  const eventId = usageId();
+  if (!eventId) return;
   // Best effort: counts must never delay the plugin or change its connection state.
   void fetch(API + "/usage/events", {
     method: "POST", signal: AbortSignal.timeout(5000),
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "X-Taste-Installation": installationId },
-    body: JSON.stringify({ kind, count, event_id: crypto.randomUUID() }),
+    body: JSON.stringify({ kind, count, event_id: eventId }),
   }).catch(() => {});
 }
 el("endpoint").textContent = API;
@@ -357,8 +373,8 @@ window.onmessage = (event) => {
   if (!message || typeof message !== "object") return;
   if (message.type === "connection") {
     installationId = typeof message.installationId === "string" && /^[a-f0-9-]{36}$/.test(message.installationId)
-      ? message.installationId : crypto.randomUUID();
-    if (installationId !== message.installationId) send({ type: "save-installation", id: installationId });
+      ? message.installationId : usageId();
+    if (installationId && installationId !== message.installationId) send({ type: "save-installation", id: installationId });
     if (message.key) {
       el<HTMLInputElement>("token").value = message.key;
       void connect();

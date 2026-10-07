@@ -1,5 +1,6 @@
 import { build } from "esbuild";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+const { version } = JSON.parse(await readFile("package.json", "utf8"));
 const api = process.env.TASTE_API_URL || "https://taste-figma-search.fly.dev";
 const url = new URL(api);
 // Figma accepts localhost for development but rejects numeric loopback URLs.
@@ -40,6 +41,7 @@ const componentCss = (
   )
 ).replace(/@font-face\s*\{[^}]*\}/g, "");
 const html = (await readFile("src/ui.html", "utf8"))
+  .replace("<!-- VERSION -->", version)
   .replace("<!-- COMPONENT_STYLES -->", () => `<style>${componentCss}</style>`)
   .replace(
     "<!-- SCRIPT -->",
