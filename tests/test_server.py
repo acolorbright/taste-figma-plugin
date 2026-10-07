@@ -214,3 +214,46 @@ def test_simultaneous_team_queries_wait_instead_of_failing(library):
             return client.post('/search/text', headers=AUTH, json={'texts': ['test']}).status_code
         with ThreadPoolExecutor(max_workers=3) as pool:
             assert list(pool.map(query, range(3))) == [200, 200, 200]
+
+
+def test_idle_window_resets_after_work_and_never_expires_during_work():
+    from server.idle import IdleTimer
+    now = [0]
+    timer = IdleTimer(10800, clock=lambda: now[0])
+    now[0] = 10799
+    assert not timer.expired()
+    timer.begin()
+    now[0] = 20000
+    assert not timer.expired()
+    timer.end()
+    now[0] += 10799
+    assert not timer.expired()
+    now[0] += 1
+    assert timer.expired()
+    assert not IdleTimer(0).expired()
+
+
+def test_only_authenticated_use_extends_idle_window(library):
+    from server.idle import IdleTimer
+    now = [0]
+    timer = IdleTimer(10800, clock=lambda: now[0])
+    with TestClient(create_app(library, Encoder(), KEY, shutdown=lambda: None, idle_timer=timer)) as client:
+        now[0] = 100
+        client.get('/ready')
+        client.get('/health')
+        client.options('/search/text', headers={'Origin': 'null', 'Access-Control-Request-Method': 'POST'})
+        assert timer.last_activity == 0
+        client.get('/health', headers=AUTH)
+        assert timer.last_activity == 100
+        now[0] = 200
+        client.post('/search/text', headers=AUTH, json={'texts': ['test']})
+        assert timer.last_activity == 200
+        assert timer.active == 0
+
+
+def test_idle_watch_requests_graceful_shutdown(library):
+    import threading
+    from server.idle import IdleTimer
+    stopped = threading.Event()
+    with TestClient(create_app(library, Encoder(), KEY, shutdown=stopped.set, idle_timer=IdleTimer(0.05))):
+        assert stopped.wait(2)

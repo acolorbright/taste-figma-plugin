@@ -6,7 +6,7 @@ import logging
 import os
 import secrets
 import warnings
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from functools import lru_cache
 
@@ -17,6 +17,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 from .search import Encoder, Library, read_image
+from .idle import IdleTimer, TrackActivity
 
 MAX_UPLOAD = 8 * 1024 * 1024
 
@@ -38,7 +39,10 @@ class TextQuery(BaseModel):
         return texts
 
 
-def create_app(library=None, encoder=None, token=None):
+def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer=None):
+    idle = idle_timer or IdleTimer(float(os.environ.get("TASTE_IDLE_SECONDS", "0")))
+    if idle.seconds > 0 and shutdown is None:
+        raise RuntimeError("Idle shutdown requires the server.run launcher.")
     access_key = token if token is not None else os.environ.get("TASTE_API_TOKEN", "")
     if len(access_key) < 24:
         raise RuntimeError(
@@ -54,7 +58,15 @@ def create_app(library=None, encoder=None, token=None):
         )
         app.state.encoder = encoder or Encoder()
         app.state.search_gate = asyncio.Semaphore(1)
-        yield
+        idle.last_activity = idle.clock()
+        watcher = asyncio.create_task(idle.watch(shutdown)) if idle.seconds > 0 else None
+        try:
+            yield
+        finally:
+            if watcher:
+                watcher.cancel()
+                with suppress(asyncio.CancelledError):
+                    await watcher
 
     app = FastAPI(
         title="Taste private image search",
@@ -72,6 +84,10 @@ def create_app(library=None, encoder=None, token=None):
         allow_methods=["GET", "POST"],
         allow_headers=["Authorization", "Content-Type"],
     )
+
+    # Authentication/size middleware below wraps this tracker: rejected requests
+    # and public health checks cannot extend the idle window.
+    app.add_middleware(TrackActivity, timer=idle)
 
     @app.middleware("http")
     async def limits(request, call_next):

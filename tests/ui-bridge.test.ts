@@ -280,3 +280,42 @@ test("loaded cards can be inserted while other previews are pending", async () =
   assert.equal(p.outgoing.at(-1).pluginMessage.type, "insert");
   assert.equal(p.outgoing.at(-1).pluginMessage.images[0].id, "a");
 });
+
+test("cold startup rotates explanations, retries temporary errors and cleans up", async () => {
+  let finish!: (value: any) => void;
+  let calls = 0;
+  const p = panel(async () => {
+    calls++;
+    if (calls === 1) return {ok:false,status:503,json:async()=>({})};
+    return new Promise(resolve => { finish = resolve; });
+  });
+  p.element("token").value = "test-key";
+  const connecting = p.element("connect").onclick();
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  await flush();
+  p.tick();
+  await flush();
+  assert.equal(calls, 2);
+  assert.equal(p.element("startup").hidden, false);
+  const first = p.element("startup-message").textContent;
+  p.tick();
+  assert.notEqual(p.element("startup-message").textContent, first);
+  finish({ok:true});
+  await connecting;
+  assert.equal(p.element("startup").hidden, true);
+  assert.equal(p.element("settings").hidden, true);
+  p.tick();
+  assert.equal(p.element("startup").hidden, true, "animation timer must be cleared");
+  assert.equal(calls, 2, "no background keepalive polling");
+});
+
+test("invalid access keys do not trigger startup retries", async () => {
+  const p = panel(async () => ({ok:false,status:401}));
+  p.element("token").value = "invalid";
+  await p.element("connect").onclick();
+  p.tick();
+  assert.equal(p.requests.length, 1);
+  assert.equal(p.element("startup").hidden, true);
+  assert.equal(p.element("settings").hidden, false);
+  assert.match(p.element("status").textContent, /Access key not accepted/);
+});

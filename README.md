@@ -22,6 +22,8 @@ The download is public; no GitHub account is needed. Searching the team library 
 - Select **one or more text layers or FigJam sticky notes** to find images based on their contents. Multiple texts are searched together.
 - Search starts automatically. Tick the images you want, then click **Insert images**. You can select and insert each result as soon as its preview loads.
 
+After a quiet period, Taste wakes up automatically. The plugin shows a small animated explanation while the server starts; your search continues when it is ready. Each use keeps it awake for another three hours.
+
 Images are placed directly on the canvas. Inserting one image selects it and starts a new similarity search, excluding that same Taste reference.
 
 ## Update the plugin
@@ -119,7 +121,7 @@ The panel uses [Figma Plugin DS](https://github.com/thomas-lowry/figma-plugin-ds
 ## Fly.io team service
 
 The pilot app is `taste-figma-search` in the **A Color Bright GmbH** organization,
-Frankfurt (`fra`), with one always-running performance Machine (2 CPUs, 4 GB RAM).
+Frankfurt (`fra`), with one performance Machine (2 CPUs, 4 GB RAM) that shuts down after three idle hours.
 The service uses CLIP ViT-B-32/openai and a snapshot of the library's CLIP vectors;
 images are fetched from the existing Taste Web Vercel Blob URLs. No Neon or Blob
 write credentials are deployed. Model weights are baked into the container.
@@ -147,3 +149,23 @@ Unchanged images inserted by this plugin use `/search/reference` to reuse their
 stored vectors. New images and text use CLIP inference. Thumbnails are cached in
 memory and simultaneous inference requests queue briefly. The single-Machine
 pilot can be interrupted by a restart/deploy; it is not a highly available setup.
+
+### Idle shutdown and startup
+
+`TASTE_IDLE_SECONDS=10800` sets a rolling three-hour window after the last
+completed authenticated request. Searches, image downloads, and connecting the
+plugin count as activity; `/ready` probes, CORS preflights, and rejected credentials
+do not. Active requests finish before the idle timer can expire. An open plugin
+makes no background keepalive requests.
+
+The application asks Uvicorn to exit cleanly. Fly's `on-failure` restart policy
+leaves it stopped; `auto_start_machines=true` wakes it on the next request.
+`auto_stop_machines="off"` prevents Fly's shorter idle policy from overriding the
+three-hour window. The plugin checks readiness before searching or inserting,
+with bounded retries for startup failures, and displays rotating explanatory
+messages when readiness takes more than 1.2 seconds. These explain startup;
+they are not live server-stage telemetry. Normal warm searches skip the animation.
+
+Set `TASTE_IDLE_SECONDS=0` to disable idle shutdown (the local default). A positive
+value requires launching with `python -m server.run`. Compute charges stop while
+the Machine is stopped; storage/network charges may still apply.

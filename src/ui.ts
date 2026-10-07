@@ -66,9 +66,9 @@ async function api(path: string, init: RequestInit = {}, signal?: AbortSignal) {
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError")
       throw error;
-    throw new Error(
-      "Cannot reach Taste. Check the service, network, and plugin domain settings.",
-    );
+    throw Object.assign(new Error(
+      "Taste is taking longer than expected. Check your connection and try again.",
+    ), { retryable: true });
   }
   if (!response.ok) {
     if (response.status === 401) {
@@ -85,9 +85,47 @@ async function api(path: string, init: RequestInit = {}, signal?: AbortSignal) {
       const body = await response.json();
       detail = typeof body.detail === "string" ? body.detail : "";
     } catch {}
-    throw new Error(detail || `Taste returned an error (${response.status}).`);
+    throw Object.assign(new Error(detail || `Taste returned an error (${response.status}).`), {
+      retryable: [502, 503, 504].includes(response.status),
+    });
   }
   return response;
+}
+// Only check readiness during a user operation; never poll an idle plugin.
+async function ready(signal = AbortSignal.timeout(120000)) {
+  const phrases = [
+    "Giving the server a gentle nudge…",
+    "A fresh start means loading the image model into memory.",
+    "CLIP is what connects your words and images to the library.",
+    "The reference index joins the model in memory for quick searches.",
+    "Once ready, Taste stays awake for three hours after the last use.",
+    "Still waiting for the server. Your search will continue automatically.",
+  ];
+  let index = 0;
+  const rotate = () => {
+    el("startup").hidden = false;
+    el("startup-message").textContent = phrases[Math.min(index++, phrases.length - 1)];
+    el("status").hidden = true;
+    timer = setTimeout(rotate, 5000);
+  };
+  let timer = setTimeout(rotate, 1200);
+  try {
+    for (let attempt = 0; ; attempt++) {
+      signal.throwIfAborted();
+      try {
+        await api("/health", {}, AbortSignal.any([signal, AbortSignal.timeout(25000)]));
+        return;
+      } catch (error) {
+        if (signal.aborted || attempt >= 3 || !(error as Error & { retryable?: boolean }).retryable)
+          throw error;
+        await new Promise<void>(resolve => setTimeout(resolve, 1500));
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+    el("startup").hidden = true;
+    el("status").hidden = false;
+  }
 }
 el("endpoint").textContent = API;
 async function connect() {
@@ -100,7 +138,7 @@ async function connect() {
   controls();
   status("Connecting…");
   try {
-    await (await api("/health")).json();
+    await ready();
     settings(false);
     send({ type: "save-connection", endpoint: API, key });
     status("");
@@ -142,9 +180,11 @@ async function search(query: SearchQuery, id: number) {
   const revision = queryRevision;
   const signal = AbortSignal.any([
     controller!.signal,
-    AbortSignal.timeout(90000),
+    AbortSignal.timeout(150000),
   ]);
   try {
+    await ready(signal);
+    if (id !== requestId || revision !== selectionRevision) return;
     status(
       query.kind !== "text"
         ? "Finding visually similar images…"
@@ -280,6 +320,7 @@ el("insert").onclick = async () => {
   status("Preparing images…");
   try {
     const images: InsertImage[] = [];
+    if (chosen.size) await ready();
     for (const result of results.filter((r) => chosen.has(r.id))) {
       const bytes = new Uint8Array(
         await (

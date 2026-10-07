@@ -29,13 +29,17 @@ def main():
             f"Local access key: {key_file} (paste its contents into the plugin’s Connection panel)",
             flush=True,
         )
-    uvicorn.run(
-        "server.app:create_app",
-        factory=True,
-        host=args.host,
-        port=args.port,
-        access_log=False,
-    )
+    from .app import create_app
+
+    def shutdown():
+        server.should_exit = True
+
+    app = create_app(shutdown=shutdown)
+    server = uvicorn.Server(uvicorn.Config(
+        app, host=args.host, port=args.port, access_log=False,
+    ))
+    server.run()
+
 
 
 if __name__ == "__main__":

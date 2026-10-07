@@ -177,6 +177,30 @@
         text-align: center;
         padding: 40px 16px;
       }
+      #startup {
+        text-align: center;
+        padding: 96px 24px;
+      }
+      #startup-message { min-height: 32px; margin-top: 16px; }
+      .startup-dots {
+        display: inline-grid;
+        grid-template-columns: repeat(3, 5px);
+        gap: 4px;
+        margin-bottom: 20px;
+      }
+      .startup-dots i {
+        width: 5px;
+        height: 5px;
+        background: var(--blue);
+        border-radius: 1px;
+        animation: pulse 1.8s ease-in-out infinite;
+      }
+      .startup-dots i:nth-child(3n + 2) { animation-delay: .2s; }
+      .startup-dots i:nth-child(3n) { animation-delay: .4s; }
+      @keyframes pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+      @media (prefers-reduced-motion: reduce) {
+        .startup-dots i { animation: none; }
+      }
       footer {
         display: flex;
         justify-content: space-between;
@@ -212,6 +236,12 @@
         <button id="connect" class="button button--secondary">Connect</button>
       </section>
       <div id="status" role="status" aria-live="polite"></div>
+      <section id="startup" hidden aria-label="Connecting to Taste">
+        <div class="startup-dots" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <h2>Waiting for Taste</h2>
+        <p class="help">The server sleeps when idle. Waking up can take a little while.</p>
+        <p id="startup-message" class="help" role="status" aria-live="polite"></p>
+      </section>
       <div id="results-toolbar" class="toolbar" hidden>
         <h2 id="results-title">Results</h2>
         <button id="clear" class="button button--tertiary" disabled>
