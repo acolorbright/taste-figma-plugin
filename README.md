@@ -22,9 +22,9 @@ The default plugin build now connects to the hosted Fly service. For local devel
 
 ### Install in Figma Desktop
 
-1. Open a Figma Design file.
+1. Open a Figma Design or FigJam file.
 2. Go to **Plugins → Development → Import plugin from manifest** and choose `dist/manifest.json`.
-3. Select one layer with a visible image fill, or one or more text layers. Shapes with text and text inside frames, groups, components, and instances are also supported; hidden text is skipped.
+3. Select one layer with a visible image fill, or one or more text layers. FigJam sticky notes, shapes with text, and text inside frames, groups, components, and instances are also supported; hidden text is skipped.
 4. Run **Taste — image search** from Development, enter the hosted team access key (or the local key for a local build), and connect.
 5. Selecting an image or text layers starts a search automatically after a 300 ms pause, including when connecting with layers already selected. Select results, then **Insert images**.
 

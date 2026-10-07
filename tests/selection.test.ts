@@ -75,3 +75,12 @@ test("text in frames and instances is recognized, excluding hidden content", () 
     "invalid",
   );
 });
+
+test("FigJam sticky notes use their text and ignore empty or hidden notes", () => {
+  const note = { id: "note", type: "STICKY", name: "Note title", text: { characters: "Warm editorial photography" } };
+  assert.equal(describeSelection([note]).kind, "text");
+  assert.equal(describeSelection([{ ...note, text: { characters: "  " } }]).kind, "invalid");
+  assert.equal(describeSelection([{ ...note, visible: false }]).kind, "invalid");
+  assert.equal(describeSelection([{ type: "GROUP", name: "Notes", children: [note] }]).kind, "text");
+  assert.equal(describeSelection([note, {type: "TEXT", name: "Caption", characters: "Natural textures"}]).count, 2);
+});

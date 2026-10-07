@@ -60,7 +60,7 @@ await writeFile(
       api: "1.0.0",
       main: "code.js",
       ui: "ui.html",
-      editorType: ["figma"],
+      editorType: ["figma", "figjam"],
       documentAccess: "dynamic-page",
       networkAccess: {
         allowedDomains: local ? ["none"] : [url.origin],
@@ -80,7 +80,7 @@ await writeFile("dist/SETUP.txt", `Taste — image search
 3. Choose manifest.json from this folder.
 4. Run Taste — image search and enter the team access key supplied separately.
    The key is remembered on this device.
-5. Select an image or text layers to search automatically. Select results and insert.
+5. Select an image, text layers, or FigJam sticky notes to search automatically. Select results and insert.
 
 Service: ${url.origin}
 ${local ? "This build requires the local Taste service." : "No local server or image library is needed."}

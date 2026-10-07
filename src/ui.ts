@@ -33,7 +33,7 @@ function status(message: string, error = false) {
 function controls() {
   el("empty").hidden = !key || working || pendingAutoSearch || results.length > 0;
   el("empty").textContent = selection.kind === "invalid"
-    ? selection.count > 0 ? selection.label : "Select an image or one or more text layers in Figma to find images."
+    ? selection.count > 0 ? selection.label : "Select an image, text layers, or sticky notes to find images."
     : !key ? "Connect to Taste to find images for your selection."
     : "No matching images found. Try a different selection.";
   el<HTMLButtonElement>("insert").disabled =

@@ -255,3 +255,23 @@ test("shapes with text export their text sublayer alongside ordinary text", asyn
     "Less administration. More law.",
   ]);
 });
+
+test("FigJam sticky selection queries note contents and inserts beside the notes", async () => {
+  const h = host();
+  h.figma.editorType = "figjam";
+  h.page.selection = [
+    { type: "STICKY", name: "Not the query", text: { characters: "  Warm editorial photography  " }, parent: h.page,
+      absoluteBoundingBox: {x:100,y:200,width:240,height:240} },
+    { type: "STICKY", name: "Also not the query", text: { characters: "Natural textures" }, parent: h.page,
+      absoluteBoundingBox: {x:400,y:200,width:240,height:240} },
+  ];
+  await h.send({type:"ready"});
+  assert.equal(h.messages.at(-1).selection.kind, "text");
+  await h.send({type:"query", requestId:1});
+  assert.deepEqual(Array.from(h.messages.at(-1).query.texts), ["Warm editorial photography", "Natural textures"]);
+  await h.send({type:"insert", images:[{id:"1",name:"Result",bytes:new Uint8Array([1])}]});
+  assert.equal(h.messages.at(-1).type, "inserted");
+  assert.equal(h.nodes[0].parent, h.page);
+  assert.equal(h.nodes[0].x, 688);
+  assert.equal(h.nodes[0].y, 200);
+});

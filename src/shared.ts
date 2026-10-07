@@ -30,7 +30,7 @@ const textContainers = new Set([
   "COMPONENT_SET",
   "SECTION",
 ]);
-const textTypes = new Set(["TEXT", "TEXT_PATH", "SHAPE_WITH_TEXT"]);
+const textTypes = new Set(["TEXT", "TEXT_PATH", "SHAPE_WITH_TEXT", "STICKY"]);
 export function selectedTextNodes(
   nodes: readonly SelectableNode[],
 ): SelectableNode[] {
@@ -57,7 +57,7 @@ export function describeSelection(
     return {
       kind: "invalid",
       count: 0,
-      label: "Select an image or one or more text layers in Figma.",
+      label: "Select an image or text layers or sticky notes.",
     };
   if (
     nodes.length === 1 &&
@@ -81,13 +81,13 @@ export function describeSelection(
       kind: "invalid",
       count: nodes.length,
       label:
-        "No readable text in the selection. Select a text layer or a container with text.",
+        "No readable text in the selection. Select a text layer, sticky note, or container with text.",
     };
   }
   return {
     kind: "invalid",
     count: nodes.length,
-    label: `Selected ${nodes.map((n) => n.type.toLowerCase()).join(", ")}. Select an image, text, or a container with text.`,
+    label: `Selected ${nodes.map((n) => n.type.toLowerCase()).join(", ")}. Select an image, text, sticky note, or container with text.`,
   };
 }
 export function gridPositions(
