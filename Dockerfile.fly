@@ -8,6 +8,8 @@ RUN useradd --create-home app && chown -R app:app /app
 USER app
 # Bake model weights into the image so restarts do not require a model download.
 RUN python -c "from server.search import Encoder; Encoder()"
+USER root
+ENTRYPOINT ["python", "/app/server/entrypoint.py"]
 ENV TASTE_LIBRARY_PATH=/app/library
 EXPOSE 8765
 CMD ["python", "-m", "server.run", "--host", "0.0.0.0"]

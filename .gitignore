@@ -14,3 +14,6 @@ deploy-data/
 
 .DS_Store
 output/
+
+.taste-usage-admin-key
+usage-data/

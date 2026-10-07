@@ -47,7 +47,13 @@ figma.ui.onmessage = async (message) => {
   try {
     if (message.type === "load-connection") {
       const key = await figma.clientStorage.getAsync(`taste-access-key:${message.endpoint}`);
-      figma.ui.postMessage({ type: "connection", key: typeof key === "string" ? key : "" });
+      const storedId = await figma.clientStorage.getAsync("taste-installation-id");
+      figma.ui.postMessage({ type: "connection", key: typeof key === "string" ? key : "", installationId: storedId });
+      return;
+    }
+    if (message.type === "save-installation") {
+      if (typeof message.id === "string" && /^[a-f0-9-]{36}$/.test(message.id))
+        await figma.clientStorage.setAsync("taste-installation-id", message.id);
       return;
     }
     if (message.type === "save-connection") {

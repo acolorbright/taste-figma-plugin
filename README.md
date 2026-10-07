@@ -26,6 +26,10 @@ After a quiet period, Taste wakes up automatically. The plugin shows a small ani
 
 Images are placed directly on the canvas. Inserting one image selects it and starts a new similarity search, excluding that same Taste reference.
 
+## Usage tracking
+
+The plugin records anonymous usage counts: opens, successful and failed searches, and images inserted. It uses a random installation ID saved on your device. It does not collect your Figma identity, file names, search text, or image contents.
+
 ## Update the plugin
 
 Close the plugin, [download the latest ZIP](https://github.com/acolorbright/taste-figma-plugin/releases/latest/download/taste-figma-plugin.zip), and replace the files in the folder you originally imported. Then reopen the plugin. If you moved that folder, import its `manifest.json` again.
@@ -169,3 +173,37 @@ they are not live server-stage telemetry. Normal warm searches skip the animatio
 Set `TASTE_IDLE_SECONDS=0` to disable idle shutdown (the local default). A positive
 value requires launching with `python -m server.run`. Compute charges stop while
 the Machine is stopped; storage/network charges may still apply.
+
+### View team usage
+
+Open **https://taste-figma-search.fly.dev/usage** and enter the separate usage
+admin key from `.taste-usage-admin-key`. The plugin's team key cannot read the
+report. The admin key is stored as Fly secret `TASTE_USAGE_ADMIN_TOKEN`; it is
+never committed, packaged, or included in the dashboard HTML. The dashboard
+keeps the key only in memory until you lock or close the tab.
+
+The report covers the last 7, 30, or 90 days, with active installations, active
+days, successful searches (text/image), failed searches, plugin opens, and images
+inserted. Dates use UTC. Installations are devices, not people; clearing Figma
+plugin storage or switching devices can count someone again. Insertion counts
+are sent only after Figma confirms the images were placed, and are best effort
+if the plugin closes or the network fails. Automatic searches after inserting an
+image count as searches. Older versions contribute search totals but not client
+events or installation counts. History begins when tracking is deployed.
+
+SQLite stores only event type, time, count, a random event ID, and an optional
+random installation ID. It lives at `/data/usage.sqlite3` on the encrypted
+`taste_usage` Fly volume (1 GB, roughly $0.15/month, plus applicable snapshot
+charges). Five-day automatic snapshots are enabled. The file survives service
+sleep, restarts, and deployments; the single volume is not replicated. Do not
+scale to multiple Machines without moving usage storage to a shared database.
+
+Opening the report can wake the same server, incurring its startup idle window.
+If the initial page returns a gateway error while it wakes, reload after about
+20 seconds. Once loaded, report refreshes do not extend the idle window, and the
+page does not auto-poll. Search contents never enter the ledger. Analytics write
+failures do not block searches or insertion.
+
+For local development, set `TASTE_USAGE_PATH=usage-data/usage.sqlite3` and a
+separate `TASTE_USAGE_ADMIN_TOKEN` of at least 24 characters. Tracking is disabled
+when no storage path is configured.

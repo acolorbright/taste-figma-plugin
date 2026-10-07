@@ -257,3 +257,67 @@ def test_idle_watch_requests_graceful_shutdown(library):
     stopped = threading.Event()
     with TestClient(create_app(library, Encoder(), KEY, shutdown=stopped.set, idle_timer=IdleTimer(0.05))):
         assert stopped.wait(2)
+
+
+def test_usage_is_durable_private_and_deduplicates_client_events(library, tmp_path):
+    from server.usage import UsageStore
+    import uuid
+    admin = 'separate-usage-admin-secret-for-tests'
+    path = tmp_path / 'usage.sqlite3'
+    store = UsageStore(path)
+    install = str(uuid.uuid4())
+    auth = {**AUTH, 'X-Taste-Installation': install}
+    with TestClient(create_app(library, Encoder(), KEY, usage=store, admin_token=admin)) as client:
+        assert client.get('/usage').status_code == 200
+        assert client.get('/usage/data').status_code == 401
+        assert client.get('/usage/data', headers=AUTH).status_code == 401
+        assert client.post('/search/text', headers=auth, json={'texts': ['private words never stored']}).status_code == 200
+        assert client.post('/search/reference', headers=auth, json={'id': 'one'}).status_code == 200
+        assert client.post('/search/reference', headers=auth, json={'id': 'missing'}).status_code == 404
+        for kind, count in [('open', 1), ('insert', 3)]:
+            event = dict(kind=kind, event_id=str(uuid.uuid4()), count=count)
+            for _ in range(2):
+                assert client.post('/usage/events', headers=auth, json=event).status_code == 204
+        assert client.post('/usage/events', headers=AUTH, json=event).status_code == 422
+        assert client.post('/usage/events', headers=auth, json={**event, 'kind': 'arbitrary'}).status_code == 422
+        assert client.post('/usage/events', headers=auth, json={**event, 'count': 999}).status_code == 422
+        report = client.get('/usage/data', headers={'Authorization': f'Bearer {admin}'}).json()
+        assert report['totals'] == {'open': 1, 'insert': 3, 'search_reference': 1, 'search_text': 1, 'search_failed': 1}
+        assert report['active_installations'] == 1
+        assert report['active_days'] == 1
+        assert len(report['daily']) == 30
+    reopened = UsageStore(path)
+    assert reopened.summary()['totals']['insert'] == 3
+    with reopened.connect() as db:
+        dump = '\n'.join(db.iterdump())
+    assert 'private words' not in dump
+    assert KEY not in dump
+    assert admin not in dump
+
+
+def test_usage_handles_older_plugins_and_storage_failures(library, tmp_path):
+    from server.usage import UsageStore
+    store = UsageStore(tmp_path / 'usage.sqlite3')
+    with TestClient(create_app(library, Encoder(), KEY, usage=store)) as client:
+        client.post('/search/text', headers=AUTH, json={'texts': ['old plugin']})
+        report = store.summary()
+        assert report['totals']['search_text'] == 1
+        assert report['active_installations'] == 0
+        def unavailable(*args):
+            raise OSError('disk full')
+        store.record = unavailable
+        assert client.post('/search/text', headers=AUTH, json={'texts': ['test']}).status_code == 200
+
+
+def test_usage_report_does_not_extend_idle_timer(library, tmp_path):
+    from server.idle import IdleTimer
+    from server.usage import UsageStore
+    now = [0]
+    timer = IdleTimer(10800, clock=lambda: now[0])
+    admin = 'separate-usage-admin-secret-for-tests'
+    with TestClient(create_app(library, Encoder(), KEY, shutdown=lambda: None, idle_timer=timer,
+                              usage=UsageStore(tmp_path / 'usage.sqlite3'), admin_token=admin)) as client:
+        now[0] = 100
+        client.get('/usage')
+        client.get('/usage/data', headers={'Authorization': f'Bearer {admin}'})
+        assert timer.last_activity == 0

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { build } from "esbuild";
 import vm from "node:vm";
+import { webcrypto } from "node:crypto";
 
 const compiled = await build({
   entryPoints: ["src/ui.ts"],
@@ -33,12 +34,13 @@ function panel(fetchResponse?: (url: string, init: any) => Promise<any>) {
     return elements.get(id);
   };
   const window: any = {};
-  const parent = { postMessage: (message: any) => (message.pluginMessage.type.endsWith("-connection") ? connections : outgoing).push(message) };
+  const parent = { postMessage: (message: any) => ((message.pluginMessage.type.endsWith("-connection") || message.pluginMessage.type === "save-installation") ? connections : outgoing).push(message) };
   vm.runInNewContext(compiled.outputFiles[0].text, {
     window,
     parent,
     document: { getElementById: element, querySelectorAll: checkboxes, createElement: makeElement },
     console,
+    crypto: webcrypto,
     DOMException,
     AbortSignal,
     AbortController,
@@ -318,4 +320,36 @@ test("invalid access keys do not trigger startup retries", async () => {
   assert.equal(p.element("startup").hidden, true);
   assert.equal(p.element("settings").hidden, false);
   assert.match(p.element("status").textContent, /Access key not accepted/);
+});
+
+test("anonymous usage counts opens once and insertion only after host confirmation", async () => {
+  const p = panel();
+  const installationId = '12345678-1234-4321-9876-123456789012';
+  p.window.onmessage({data:{pluginMessage:{type:'connection',key:'saved-key',installationId}}});
+  await new Promise(resolve=>setImmediate(resolve));
+  const events=()=>p.requests.filter(r=>r.url.endsWith('/usage/events'));
+  assert.equal(events().length,1);
+  assert.equal(JSON.parse(events()[0].init.body).kind,'open');
+  assert.equal(events()[0].init.headers['X-Taste-Installation'],installationId);
+  await p.element('connect').onclick();
+  assert.equal(events().length,1);
+  p.window.onmessage({data:{pluginMessage:{type:'inserted',count:3}}});
+  assert.equal(events().length,2);
+  const inserted=JSON.parse(events()[1].init.body);
+  assert.equal(inserted.kind,'insert');
+  assert.equal(inserted.count,3);
+  assert.deepEqual(Object.keys(inserted).sort(),['count','event_id','kind']);
+});
+
+test("usage network failure never prevents connection or exposes content", async () => {
+  const p = panel(async url=>{
+    if(url.endsWith('/usage/events'))throw new Error('offline');
+    return {ok:true,json:async()=>({results:[]})};
+  });
+  p.window.onmessage({data:{pluginMessage:{type:'connection',key:'saved-key'}}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(p.element('settings').hidden,true);
+  const saved=p.connections.find(m=>m.pluginMessage.type==='save-installation');
+  assert.match(saved.pluginMessage.id,/^[a-f0-9-]{36}$/);
+  assert.equal(p.element('status').dataset.error,'false');
 });

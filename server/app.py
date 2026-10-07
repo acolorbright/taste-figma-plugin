@@ -6,18 +6,22 @@ import logging
 import os
 import secrets
 import warnings
+import re
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from functools import lru_cache
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, HTMLResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 from .search import Encoder, Library, read_image
 from .idle import IdleTimer, TrackActivity
+from .usage import UsageStore
+from typing import Literal
+from uuid import UUID
 
 MAX_UPLOAD = 8 * 1024 * 1024
 
@@ -39,10 +43,21 @@ class TextQuery(BaseModel):
         return texts
 
 
-def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer=None):
+class UsageEvent(BaseModel):
+    kind: Literal["open", "insert"]
+    event_id: UUID
+    count: int = Field(default=1, ge=1, le=24)
+
+
+def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer=None, usage=None, admin_token=None):
     idle = idle_timer or IdleTimer(float(os.environ.get("TASTE_IDLE_SECONDS", "0")))
     if idle.seconds > 0 and shutdown is None:
         raise RuntimeError("Idle shutdown requires the server.run launcher.")
+    admin_key = admin_token if admin_token is not None else os.environ.get("TASTE_USAGE_ADMIN_TOKEN", "")
+    if admin_key and len(admin_key) < 24:
+        raise RuntimeError("TASTE_USAGE_ADMIN_TOKEN must be at least 24 characters.")
+    usage_path = os.environ.get("TASTE_USAGE_PATH")
+    ledger = usage or (UsageStore(usage_path) if usage_path else None)
     access_key = token if token is not None else os.environ.get("TASTE_API_TOKEN", "")
     if len(access_key) < 24:
         raise RuntimeError(
@@ -82,7 +97,7 @@ def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer
         allow_origins=["*"],
         allow_private_network=True,
         allow_methods=["GET", "POST"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=["Authorization", "Content-Type", "X-Taste-Installation"],
     )
 
     # Authentication/size middleware below wraps this tracker: rejected requests
@@ -91,10 +106,12 @@ def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer
 
     @app.middleware("http")
     async def limits(request, call_next):
-        if request.url.path != "/ready" and request.method != "OPTIONS" and not secrets.compare_digest(
+        expected_key = admin_key if request.url.path == "/usage/data" else access_key
+        public = request.method == "GET" and request.url.path in ("/ready", "/usage")
+        if not public and request.method != "OPTIONS" and (not expected_key or not secrets.compare_digest(
             request.headers.get("authorization", "").encode(),
-            f"Bearer {access_key}".encode(),
-        ):
+            f"Bearer {expected_key}".encode(),
+        )):
             return Response(
                 "Invalid team access key",
                 status_code=401,
@@ -124,10 +141,47 @@ def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer
 
         request._receive = receive
         response = await call_next(request)
+        if request.url.path in ("/search/text", "/search/image", "/search/reference") and request.method == "POST":
+            kind = "search_" + request.url.path.rsplit("/", 1)[1] if response.status_code == 200 else "search_failed"
+            await record_usage(kind, installation(request))
         response.headers["Cache-Control"] = "no-store"
         if request.method == "OPTIONS":
             response.headers["Access-Control-Allow-Private-Network"] = "true"
         return response
+
+    def installation(request):
+        value = request.headers.get("x-taste-installation", "")
+        return value.lower() if re.fullmatch(r"[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}", value) else None
+
+    async def record_usage(kind, identity, count=1, event_id=None):
+        if ledger:
+            try:
+                await run_in_threadpool(ledger.record, kind, identity, count, event_id)
+            except Exception:
+                # Analytics must never prevent a search or insertion.
+                logging.warning("Could not record usage event")
+
+    @app.get("/usage", response_class=HTMLResponse)
+    def usage_page():
+        return HTMLResponse(Path(__file__).with_name("usage.html").read_text(), headers={
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+            "Referrer-Policy": "no-referrer",
+        })
+
+    @app.get("/usage/data")
+    def usage_summary(days: int = Query(default=30, ge=1, le=366)):
+        if not ledger:
+            raise HTTPException(503, "Usage tracking is not configured.")
+        return ledger.summary(days)
+
+    @app.post("/usage/events", status_code=204)
+    async def usage_event(event: UsageEvent, request: Request):
+        identity = installation(request)
+        if identity is None:
+            raise HTTPException(422, "An anonymous installation ID is required.")
+        await record_usage(event.kind, identity, 1 if event.kind == "open" else event.count, str(event.event_id))
+        return Response(status_code=204)
 
     def authenticate(request: Request):
         supplied = request.headers.get("authorization", "")

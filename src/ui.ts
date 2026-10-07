@@ -7,6 +7,8 @@ const send = (message: unknown) =>
   parent.postMessage({ pluginMessage: message }, "*");
 let selection: SelectionInfo = { kind: "invalid", count: 0, label: "" };
 let key = "";
+let installationId = "";
+let recordedOpen = false;
 let working = false;
 let inserting = false;
 let selectionRevision = 0;
@@ -61,7 +63,7 @@ async function api(path: string, init: RequestInit = {}, signal?: AbortSignal) {
     response = await fetch(API + path, {
       ...init,
       signal: signal ?? AbortSignal.timeout(90000),
-      headers: { ...init.headers, Authorization: `Bearer ${key}` },
+      headers: { ...init.headers, Authorization: `Bearer ${key}`, ...(installationId ? { "X-Taste-Installation": installationId } : {}) },
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError")
@@ -127,6 +129,15 @@ async function ready(signal = AbortSignal.timeout(120000)) {
     el("status").hidden = false;
   }
 }
+function trackUsage(kind: "open" | "insert", count = 1) {
+  if (!key || !installationId) return;
+  // Best effort: counts must never delay the plugin or change its connection state.
+  void fetch(API + "/usage/events", {
+    method: "POST", signal: AbortSignal.timeout(5000),
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "X-Taste-Installation": installationId },
+    body: JSON.stringify({ kind, count, event_id: crypto.randomUUID() }),
+  }).catch(() => {});
+}
 el("endpoint").textContent = API;
 async function connect() {
   key = el<HTMLInputElement>("token").value.trim();
@@ -140,6 +151,7 @@ async function connect() {
   try {
     await ready();
     settings(false);
+    if (!recordedOpen) { trackUsage("open"); recordedOpen = true; }
     send({ type: "save-connection", endpoint: API, key });
     status("");
   } catch (e) {
@@ -344,6 +356,9 @@ window.onmessage = (event) => {
   const message = event.data?.pluginMessage;
   if (!message || typeof message !== "object") return;
   if (message.type === "connection") {
+    installationId = typeof message.installationId === "string" && /^[a-f0-9-]{36}$/.test(message.installationId)
+      ? message.installationId : crypto.randomUUID();
+    if (installationId !== message.installationId) send({ type: "save-installation", id: installationId });
     if (message.key) {
       el<HTMLInputElement>("token").value = message.key;
       void connect();
@@ -371,6 +386,7 @@ window.onmessage = (event) => {
     status(message.message, true);
   }
   if (message.type === "inserted") {
+    trackUsage("insert", message.count);
     inserting = false;
     working = false;
     controls();
