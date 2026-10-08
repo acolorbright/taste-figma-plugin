@@ -20,7 +20,7 @@ The download is public; no GitHub account is needed. Searching the team library 
 
 - Select **one image** to find visually similar images.
 - Select **one or more text layers or FigJam sticky notes** to find images based on their contents. Multiple texts are searched together.
-- Search starts automatically. Tick the images you want, then click **Insert images**. You can select and insert each result as soon as its preview loads.
+- Search starts automatically. Scroll down to load more results, 24 at a time. Tick up to 24 images per insertion, then click **Insert images**. You can select each result as soon as its preview loads.
 
 After a quiet period, Taste wakes up automatically. The plugin shows a small animated explanation while the server starts; your search continues when it is ready. Each use keeps it awake for another three hours.
 
@@ -207,3 +207,20 @@ failures do not block searches or insertion.
 For local development, set `TASTE_USAGE_PATH=usage-data/usage.sqlite3` and a
 separate `TASTE_USAGE_ADMIN_TOKEN` of at least 24 characters. Tracking is disabled
 when no storage path is configured.
+
+### Result paging
+
+New clients request paginated searches. The server ranks the library once and
+returns the first 24 results plus a temporary search cursor. Scrolling near the
+bottom fetches another 24 without uploading the source or re-running CLIP.
+Snapshots are held in memory (at most 64, expiring after three hours without a
+page request); a restart or cache eviction requires selecting the layer again.
+Older clients retain their original 24-result response. Fetching another page
+does not count as a new search in the usage report.
+
+The UI keeps four thumbnail downloads in flight per batch and waits for that
+batch to finish before starting another. Off-screen images decode lazily. Checked
+images persist across pages, and changing the Figma selection discards stale
+responses. A Load more button also works if automatic intersection detection is
+unavailable. Further results are progressively less similar; paging can reach
+the end of the indexed library.

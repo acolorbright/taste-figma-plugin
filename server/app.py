@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from .search import Encoder, Library, read_image
 from .idle import IdleTimer, TrackActivity
 from .usage import UsageStore
+from .paging import SearchPages
 from typing import Literal
 from uuid import UUID
 
@@ -27,10 +28,12 @@ MAX_UPLOAD = 8 * 1024 * 1024
 
 
 class ReferenceQuery(BaseModel):
+    paginate: bool = False
     id: str = Field(min_length=1, max_length=256)
 
 
 class TextQuery(BaseModel):
+    paginate: bool = False
     texts: list[str] = Field(min_length=1, max_length=50)
     limit: int = Field(default=24, ge=1, le=48)
 
@@ -50,6 +53,7 @@ class UsageEvent(BaseModel):
 
 
 def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer=None, usage=None, admin_token=None):
+    pages = SearchPages()
     idle = idle_timer or IdleTimer(float(os.environ.get("TASTE_IDLE_SECONDS", "0")))
     if idle.seconds > 0 and shutdown is None:
         raise RuntimeError("Idle shutdown requires the server.run launcher.")
@@ -194,11 +198,23 @@ def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer
     def ready():
         return {"status": "ok"}
 
+    def ranked(vector, limit, exclude_id=None, paginate=False):
+        if not paginate:
+            return {"results": app.state.library.rank(vector, limit, exclude_id)}
+        return pages.start(app.state.library.rank(vector, len(app.state.library.refs), exclude_id), limit)
+
+    @app.get("/search/page", dependencies=[Depends(authenticate)])
+    def next_page(search_id: str = Query(min_length=1, max_length=128), offset: int = Query(ge=0)):
+        page = pages.page(search_id, offset)
+        if page is None:
+            raise HTTPException(410, "This search has expired. Select the layer again to start a new search.")
+        return page
+
     @app.post("/search/reference", dependencies=[Depends(authenticate)])
     def reference_search(query: ReferenceQuery):
         if query.id not in app.state.library.indices:
             raise HTTPException(404, "Reference not found.")
-        return {"results": app.state.library.rank(app.state.library.reference_vector(query.id), 24, query.id)}
+        return ranked(app.state.library.reference_vector(query.id), 24, query.id, query.paginate)
 
     @app.get("/health", dependencies=[Depends(authenticate)])
     def health():
@@ -209,7 +225,7 @@ def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer
             "weights": "openai",
         }
 
-    async def search(work, limit, exclude_id=None):
+    async def search(work, limit, exclude_id=None, paginate=False):
         try:
             # Serialize model inference with a short queue for simultaneous team requests.
             await asyncio.wait_for(app.state.search_gate.acquire(), timeout=10)
@@ -219,7 +235,7 @@ def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer
             )
         try:
             vector = await run_in_threadpool(work)
-            return {"results": app.state.library.rank(vector, limit, exclude_id)}
+            return ranked(vector, limit, exclude_id, paginate)
         except (
             ValueError,
             UnidentifiedImageError,
@@ -237,17 +253,17 @@ def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer
 
     @app.post("/search/text", dependencies=[Depends(authenticate)])
     async def text_search(query: TextQuery):
-        return await search(lambda: app.state.encoder.text(query.texts), query.limit)
+        return await search(lambda: app.state.encoder.text(query.texts), query.limit, paginate=query.paginate)
 
     @app.post("/search/image", dependencies=[Depends(authenticate)])
-    async def image_search(image: UploadFile = File(...), exclude_id: str | None = Form(default=None, max_length=256)):
+    async def image_search(image: UploadFile = File(...), exclude_id: str | None = Form(default=None, max_length=256), paginate: bool = Form(default=False)):
         try:
             data = await image.read(MAX_UPLOAD + 1)
         finally:
             await image.close()
         if not data or len(data) > MAX_UPLOAD:
             raise HTTPException(413, "Choose an image smaller than 8 MB.")
-        return await search(lambda: app.state.encoder.image(data), 24, exclude_id)
+        return await search(lambda: app.state.encoder.image(data), 24, exclude_id, paginate)
 
     @lru_cache(maxsize=128)
     def thumbnail(identity):

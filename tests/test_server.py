@@ -321,3 +321,46 @@ def test_usage_report_does_not_extend_idle_timer(library, tmp_path):
         client.get('/usage')
         client.get('/usage/data', headers={'Authorization': f'Bearer {admin}'})
         assert timer.last_activity == 0
+
+
+def test_paging_reuses_inference_and_excludes_source_across_pages(library):
+    class CountingEncoder(Encoder):
+        calls = 0
+        def text(self, texts):
+            self.calls += 1
+            return super().text(texts)
+    encoder = CountingEncoder()
+    library.refs = [{'id': str(i), 'name': str(i), 'cluster': ''} for i in range(75)]
+    library.matrix = np.tile(np.eye(1, 512, dtype=np.float32), (75, 1))
+    library.indices = {r['id']: i for i, r in enumerate(library.refs)}
+    with TestClient(create_app(library, encoder, KEY)) as client:
+        page = client.post('/search/text', headers=AUTH, json={'texts':['test'], 'paginate':True}).json()
+        ids = [r['id'] for r in page['results']]
+        assert len(ids) == 24
+        cursor = page['next']
+        assert client.get('/search/page', params=cursor).status_code == 401
+        while page['next']:
+            page = client.get('/search/page', params=page['next'], headers=AUTH).json()
+            ids.extend(r['id'] for r in page['results'])
+        assert ids == [str(i) for i in range(75)]
+        assert encoder.calls == 1
+        repeated = client.get('/search/page', params=cursor, headers=AUTH).json()
+        assert repeated['results'][0]['id'] == '24'
+        assert client.get('/search/page', params={'search_id':'missing','offset':24}, headers=AUTH).status_code == 410
+        page = client.post('/search/reference', headers=AUTH, json={'id':'0','paginate':True}).json()
+        ids = [r['id'] for r in page['results']]
+        while page['next']:
+            page = client.get('/search/page', params=page['next'], headers=AUTH).json()
+            ids.extend(r['id'] for r in page['results'])
+        assert ids == [str(i) for i in range(1,75)]
+
+
+def test_page_cache_is_bounded_and_expiry_is_explicit():
+    from server.paging import SearchPages
+    pages = SearchPages(capacity=1)
+    first = pages.start(list(range(50)))['next']
+    second = pages.start(list(range(30)))['next']
+    assert pages.page(first['search_id'],24) is None
+    assert pages.page(second['search_id'],24)['results'] == list(range(24,30))
+    pages.ttl = 0
+    assert pages.page(second['search_id'],24) is None

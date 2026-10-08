@@ -48,7 +48,7 @@ function controls() {
   document
     .querySelectorAll<HTMLInputElement>(".checkbox__box")
     .forEach((input) => {
-      input.disabled = working || input.dataset.loaded !== "true";
+      input.disabled = working || input.dataset.loaded !== "true" || (chosen.size >= 24 && !input.checked);
     });
   el<HTMLButtonElement>("connect").disabled = working;
   el<HTMLInputElement>("token").disabled = working;
@@ -182,6 +182,12 @@ async function connect() {
 }
 el("connect").onclick = connect;
 function resetResults() {
+  nextPage = null;
+  pageLoading = false;
+  previewsLoading = false;
+  moreObserver?.disconnect();
+  el("more").hidden = true;
+  el("more").textContent = "Load more";
   chosen.clear();
   results = [];
   for (const url of urls) URL.revokeObjectURL(url);
@@ -222,10 +228,11 @@ async function search(query: SearchQuery, id: number) {
     if (query.kind === "reference") {
       response = await api("/search/reference", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: query.id }),
+        body: JSON.stringify({ id: query.id, paginate: true }),
       }, signal);
     } else if (query.kind === "image") {
       const form = new FormData();
+      form.append("paginate", "true");
       if (query.excludeId) form.append("exclude_id", query.excludeId);
       form.append(
         "image",
@@ -243,19 +250,80 @@ async function search(query: SearchQuery, id: number) {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ texts: query.texts, limit: 24 }),
+          body: JSON.stringify({ texts: query.texts, limit: 24, paginate: true }),
         },
         signal,
       );
     const data = await response.json();
     if (id !== requestId || revision !== selectionRevision) return;
     results = data.results;
+    nextPage = data.next ?? null;
 
     el("results-toolbar").hidden = false;
     el("results-title").textContent = `${results.length} results`;
     status("");
+    appendCards(data.results, id, revision, signal);
+  } catch (e) {
+    if (id === requestId && revision === selectionRevision)
+      status((e as Error).message, true);
+  } finally {
+    if (id === requestId) {
+      working = false;
+      if (pendingAutoSearch) scheduleSelectionSearch();
+      controls();
+    }
+  }
+}
+type PageCursor = { search_id: string; offset: number };
+let nextPage: PageCursor | null = null;
+let pageLoading = false;
+let previewsLoading = false;
+let moreObserver: IntersectionObserver | undefined;
+function watchMore() {
+  el("more").hidden = !nextPage;
+  el<HTMLButtonElement>("more").disabled = pageLoading || previewsLoading;
+  moreObserver?.disconnect();
+  if (nextPage && !pageLoading && !previewsLoading && typeof IntersectionObserver !== "undefined") {
+    moreObserver = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) void loadMore();
+    }, { root: el("scroll-area"), rootMargin: "400px" });
+    moreObserver.observe(el("more"));
+  }
+}
+async function loadMore() {
+  if (!nextPage || pageLoading || previewsLoading || working || pendingAutoSearch) return;
+  const id = requestId, revision = selectionRevision, cursor = nextPage;
+  const signal = AbortSignal.any([controller!.signal, AbortSignal.timeout(90000)]);
+  pageLoading = true;
+  moreObserver?.disconnect();
+  el<HTMLButtonElement>("more").disabled = true;
+  el("more").textContent = "Loading more…";
+  try {
+    const data = await (await api(`/search/page?search_id=${encodeURIComponent(cursor.search_id)}&offset=${cursor.offset}`, {}, signal)).json();
+    if (id !== requestId || revision !== selectionRevision) return;
+    nextPage = data.next ?? null;
+    results.push(...data.results);
+    el("results-title").textContent = `${results.length} results`;
+    appendCards(data.results, id, revision, signal);
+  } catch (error) {
+    if (id !== requestId || revision !== selectionRevision) return;
+    // Keep existing results and selections usable; retry only on a click.
+    el("more").textContent = "Retry loading more";
+    el("more").title = (error as Error).message;
+    return;
+  } finally {
+    if (id === requestId && revision === selectionRevision) {
+      pageLoading = false;
+      el<HTMLButtonElement>("more").disabled = previewsLoading;
+    }
+  }
+  el("more").textContent = "Load more";
+  watchMore();
+}
+el("more").onclick = loadMore;
+function appendCards(batch: Result[], id: number, revision: number, signal: AbortSignal) {
     // Bounded downloads keep the service responsive and preserve ranked card order.
-    const cards = results.map((result) => {
+    const cards = batch.map((result) => {
       const card = document.createElement("div");
       card.className = "card checkbox";
       card.title = result.cluster;
@@ -270,8 +338,10 @@ async function search(query: SearchQuery, id: number) {
       label.htmlFor = checkbox.id;
       const img = document.createElement("img");
       img.alt = "";
+      img.loading = "lazy";
       img.onload = () => {
-        if (signal.aborted || id !== requestId || revision !== selectionRevision) return;
+        // Lazy decoding can happen long after the download's timeout elapsed.
+        if (id !== requestId || revision !== selectionRevision) return;
         checkbox.dataset.loaded = "true";
         controls();
       };
@@ -289,6 +359,7 @@ async function search(query: SearchQuery, id: number) {
     });
     let cursor = 0;
     // Thumbnails load independently; they must not hold the search/insertion lock.
+    previewsLoading = true;
     void Promise.all(
       Array.from({ length: 4 }, async () => {
         while (cursor < cards.length) {
@@ -317,17 +388,11 @@ async function search(query: SearchQuery, id: number) {
           }
         }
       }),
-    );
-  } catch (e) {
-    if (id === requestId && revision === selectionRevision)
-      status((e as Error).message, true);
-  } finally {
-    if (id === requestId) {
-      working = false;
-      if (pendingAutoSearch) scheduleSelectionSearch();
-      controls();
-    }
-  }
+    ).finally(() => {
+      if (id !== requestId || revision !== selectionRevision) return;
+      previewsLoading = false;
+      watchMore();
+    });
 }
 el("clear").onclick = () => {
   if (working) return;

@@ -238,7 +238,7 @@ test("reference query uses stored embedding endpoint without uploading bytes", a
   p.window.onmessage({data:{pluginMessage:{type:"query", requestId:1, query:{kind:"reference",id:"001"}}}});
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(p.requests.at(-1).url, "http://localhost:8765/search/reference");
-  assert.deepEqual(JSON.parse(p.requests.at(-1).init.body), {id:"001"});
+  assert.deepEqual(JSON.parse(p.requests.at(-1).init.body), {id:"001",paginate:true});
 });
 
 
@@ -379,4 +379,37 @@ test("unavailable crypto only disables client counts, never plugin startup", asy
     assert.equal(p.outgoing.at(-1).pluginMessage.type,"query");
     assert.equal(p.requests.filter(r=>r.url.endsWith("/usage/events")).length,0);
   }
+});
+
+test("more results append without re-encoding, keep selections, and ignore stale pages", async () => {
+  let finishPage!: (value:any)=>void;
+  let pages = 0;
+  const p = panel(async url=>{
+    if(url.endsWith('/health'))return {ok:true};
+    if(url.endsWith('/search/text'))return {ok:true,json:async()=>({results:[{id:'a',name:'A',cluster:''}],next:{search_id:'query',offset:24}})};
+    if(url.includes('/search/page')){
+      pages++;
+      if(pages===1)return {ok:true,json:async()=>({results:[{id:'b',name:'B',cluster:''}],next:{search_id:'query',offset:48}})};
+      return new Promise(resolve=>{finishPage=resolve});
+    }
+    return {ok:true,blob:async()=>new Blob(['image'])};
+  });
+  const flush=()=>new Promise(resolve=>setImmediate(resolve));
+  p.element('token').value='test-key';await p.element('connect').onclick();
+  select(p,'text');p.tick();
+  p.window.onmessage({data:{pluginMessage:{type:'query',requestId:1,query:{kind:'text',texts:['test']}}}});
+  await flush();
+  p.element('grid').children[0].children[1].children[0].onload();
+  const first=p.checkboxes()[0]; first.checked=true;first.onchange();
+  await p.element('more').onclick();await flush();
+  assert.equal(p.checkboxes().length,2);
+  assert.equal(first.checked,true);
+  assert.equal(p.element('insert').disabled,false);
+  assert.equal(p.requests.filter(r=>r.url.endsWith('/search/text')).length,1);
+  const loading=p.element('more').onclick();await flush();
+  select(p,'image');
+  finishPage({ok:true,json:async()=>({results:[{id:'stale',name:'stale'}],next:null})});
+  await loading;
+  assert.equal(p.checkboxes().length,0);
+  assert.equal(p.element('more').hidden,true);
 });
