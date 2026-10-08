@@ -5,6 +5,9 @@ import threading
 import time
 
 
+MAX_RESULTS = 240
+
+
 class SearchPages:
     def __init__(self, capacity=64, ttl=10800):
         self.capacity, self.ttl = capacity, ttl
@@ -12,6 +15,7 @@ class SearchPages:
         self.lock = threading.Lock()
 
     def start(self, results, size=24):
+        results = results[:MAX_RESULTS]
         if len(results) <= size:
             return {'results': results, 'next': None}
         with self.lock:

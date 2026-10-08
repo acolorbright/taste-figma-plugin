@@ -20,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from .search import Encoder, Library, read_image
 from .idle import IdleTimer, TrackActivity
 from .usage import UsageStore
-from .paging import SearchPages
+from .paging import MAX_RESULTS, SearchPages
 from typing import Literal
 from uuid import UUID
 
@@ -201,7 +201,7 @@ def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer
     def ranked(vector, limit, exclude_id=None, paginate=False):
         if not paginate:
             return {"results": app.state.library.rank(vector, limit, exclude_id)}
-        return pages.start(app.state.library.rank(vector, len(app.state.library.refs), exclude_id), limit)
+        return pages.start(app.state.library.rank(vector, MAX_RESULTS, exclude_id), limit)
 
     @app.get("/search/page", dependencies=[Depends(authenticate)])
     def next_page(search_id: str = Query(min_length=1, max_length=128), offset: int = Query(ge=0)):

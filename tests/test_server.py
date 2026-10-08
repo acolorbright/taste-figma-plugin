@@ -364,3 +364,19 @@ def test_page_cache_is_bounded_and_expiry_is_explicit():
     assert pages.page(second['search_id'],24)['results'] == list(range(24,30))
     pages.ttl = 0
     assert pages.page(second['search_id'],24) is None
+
+
+def test_paging_stops_after_ten_pages():
+    from server.paging import SearchPages
+    pages = SearchPages()
+    page = pages.start(list(range(500)))
+    results = []
+    count = 0
+    while True:
+        count += 1
+        results.extend(page['results'])
+        if page['next'] is None:
+            break
+        page = pages.page(**{'identity': page['next']['search_id'], 'offset': page['next']['offset']})
+    assert count == 10
+    assert results == list(range(240))

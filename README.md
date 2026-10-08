@@ -20,7 +20,7 @@ The download is public; no GitHub account is needed. Searching the team library 
 
 - Select **one image** to find visually similar images.
 - Select **one or more text layers or FigJam sticky notes** to find images based on their contents. Multiple texts are searched together.
-- Search starts automatically. Scroll down to load more results, 24 at a time. Tick up to 24 images per insertion, then click **Insert images**. You can select each result as soon as its preview loads.
+- Search starts automatically. Scroll down to load more results, 24 at a time, up to 10 pages (240 images). Tick up to 24 images per insertion, then click **Insert images**. You can select each result as soon as its preview loads.
 
 After a quiet period, Taste wakes up automatically. The plugin shows a small animated explanation while the server starts; your search continues when it is ready. Each use keeps it awake for another three hours.
 
@@ -222,5 +222,4 @@ The UI keeps four thumbnail downloads in flight per batch and waits for that
 batch to finish before starting another. Off-screen images decode lazily. Checked
 images persist across pages, and changing the Figma selection discards stale
 responses. A Load more button also works if automatic intersection detection is
-unavailable. Further results are progressively less similar; paging can reach
-the end of the indexed library.
+unavailable. Further results are progressively less similar; paging stops after 10 pages (240 images), or earlier if the library has fewer matches.

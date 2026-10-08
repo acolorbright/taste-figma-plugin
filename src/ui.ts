@@ -193,7 +193,6 @@ function resetResults() {
   for (const url of urls) URL.revokeObjectURL(url);
   urls.length = 0;
   el("grid").replaceChildren();
-  el("results-toolbar").hidden = true;
 }
 function startSearch() {
   if (working || !key || selection.kind === "invalid") return;
@@ -259,8 +258,6 @@ async function search(query: SearchQuery, id: number) {
     results = data.results;
     nextPage = data.next ?? null;
 
-    el("results-toolbar").hidden = false;
-    el("results-title").textContent = `${results.length} results`;
     status("");
     appendCards(data.results, id, revision, signal);
   } catch (e) {
@@ -303,7 +300,6 @@ async function loadMore() {
     if (id !== requestId || revision !== selectionRevision) return;
     nextPage = data.next ?? null;
     results.push(...data.results);
-    el("results-title").textContent = `${results.length} results`;
     appendCards(data.results, id, revision, signal);
   } catch (error) {
     if (id !== requestId || revision !== selectionRevision) return;

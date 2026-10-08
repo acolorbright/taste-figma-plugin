@@ -109,16 +109,7 @@
       #status[data-error="true"] {
         color: var(--figma-color-text-danger, #dc3412);
       }
-      .toolbar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin: 0 0 8px;
-        min-height: 24px;
-      }
-      .toolbar .button {
-        height: 24px;
-      }
+      .footer-actions { display: flex; gap: 8px; align-items: center; }
       .grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -244,21 +235,18 @@
         <p class="help">The server sleeps when idle. Waking up can take a little while.</p>
         <p id="startup-message" class="help" role="status" aria-live="polite"></p>
       </section>
-      <div id="results-toolbar" class="toolbar" hidden>
-        <h2 id="results-title">Results</h2>
-        <button id="clear" class="button button--tertiary" disabled>
-          Clear selection
-        </button>
-      </div>
       <div id="grid" class="grid" aria-label="Image results"></div>
       <button id="more" class="button button--secondary" style="margin:16px auto" hidden>Load more</button>
       <div id="empty" class="empty">Select an image, text layers, or sticky notes to find images.</div>
     </main>
     <footer>
       <div><span id="selection-count" aria-live="polite">0 selected</span><span id="plugin-version">v<!-- VERSION --></span></div>
+      <div class="footer-actions">
+      <button id="clear" class="button button--tertiary" disabled>Cancel selection</button>
       <button id="insert" class="button button--primary" disabled>
         Insert images
       </button>
+      </div>
     </footer>
     <!-- SCRIPT -->
   </body>
