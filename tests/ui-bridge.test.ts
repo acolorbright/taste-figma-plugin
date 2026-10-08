@@ -21,7 +21,7 @@ function panel(fetchResponse?: (url: string, init: any) => Promise<any>, cryptoP
   let timerId = 0;
   const makeElement = (): any => ({
     textContent: "", value: "", hidden: false, disabled: false, dataset: {},
-    children: [],
+    children: [], style: {},
     setAttribute() {},
     append(...children: any[]) { this.children.push(...children); },
     replaceChildren() { this.children = []; },
@@ -42,6 +42,9 @@ function panel(fetchResponse?: (url: string, init: any) => Promise<any>, cryptoP
     console,
     crypto: cryptoProvider,
     DOMException,
+    Blob,
+    FormData,
+    Uint8Array,
     AbortSignal,
     AbortController,
     URL,
@@ -412,4 +415,31 @@ test("more results append without re-encoding, keep selections, and ignore stale
   await loading;
   assert.equal(p.checkboxes().length,0);
   assert.equal(p.element('more').hidden,true);
+});
+
+test("library view suppresses search and uploads a selection progressively", async () => {
+  const p = panel(async (url, init) => ({ok: true, json: async () =>
+    url.endsWith("/library/channels") ? {channels: []} : url.endsWith("/library/images") ? {added: true} : {count: 2}}));
+  p.element("token").value = "test-access-key";
+  await p.element("connect").onclick();
+  p.element("library-tab").click();
+  p.window.onmessage({data: {pluginMessage: {type: "selection", imageCount: 3, selection: {kind: "invalid", count: 3, label: "Multiple images"}}}});
+  assert.equal(p.element("add-images").textContent, "Add 3 selected images to library");
+  assert.equal(p.element("add-images").disabled, false);
+  p.tick();
+  assert.equal(p.outgoing.filter(m => m.pluginMessage.type === "query").length, 0);
+  await p.element("add-images").onclick();
+  assert.equal(p.outgoing.at(-1).pluginMessage.type, "upload-start");
+  assert.equal(p.element("search-tab").disabled, true);
+  p.window.onmessage({data: {pluginMessage: {type: "upload-started", total: 3}}});
+  assert.equal(p.outgoing.at(-1).pluginMessage.type, "upload-next");
+  p.window.onmessage({data: {pluginMessage: {type: "upload-image", index: 1, name: "Image", bytes: new Uint8Array([1])}}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(p.requests.filter(r => r.url.endsWith("/library/images")).length, 1);
+  assert.equal(p.outgoing.at(-1).pluginMessage.type, "upload-next");
+  p.window.onmessage({data: {pluginMessage: {type: "upload-image", index: 2, name: "Bad", error: "Could not export"}}});
+  await new Promise(resolve => setImmediate(resolve));
+  p.window.onmessage({data: {pluginMessage: {type: "upload-finished"}}});
+  assert.match(p.element("upload-status").textContent, /1 added.*1 failed/);
+  assert.equal(p.element("search-tab").disabled, false);
 });

@@ -10,6 +10,12 @@ let key = "";
 let installationId = "";
 let recordedOpen = false;
 let working = false;
+let view: "search" | "library" = "search";
+let imageCount = 0;
+let uploading = false;
+let uploadTotal = 0, uploadAdded = 0, uploadDuplicates = 0, uploadFailed = 0;
+let channelTimer: ReturnType<typeof setTimeout> | undefined;
+
 let inserting = false;
 let selectionRevision = 0;
 let queryRevision = 0;
@@ -17,7 +23,7 @@ let pendingAutoSearch = false;
 let autoSearchTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleSelectionSearch() {
   clearTimeout(autoSearchTimer);
-  pendingAutoSearch = selection.kind !== "invalid" && !!key && !inserting;
+  pendingAutoSearch = view === "search" && selection.kind !== "invalid" && !!key && !inserting;
   if (!pendingAutoSearch) return;
   autoSearchTimer = setTimeout(() => {
     if (!working && pendingAutoSearch) startSearch();
@@ -33,6 +39,13 @@ function status(message: string, error = false) {
   el("status").dataset.error = String(error);
 }
 function controls() {
+  el<HTMLButtonElement>("add-images").disabled = !key || !imageCount || uploading || working;
+  el("add-images").textContent = `Add ${imageCount} selected image${imageCount === 1 ? "" : "s"} to library`;
+  el<HTMLButtonElement>("search-tab").disabled = uploading || inserting;
+  el<HTMLButtonElement>("library-tab").disabled = uploading || inserting;
+  el<HTMLButtonElement>("add-channel").disabled = !key;
+  el<HTMLButtonElement>("refresh-channels").disabled = !key;
+
   el("empty").hidden = !key || working || pendingAutoSearch || results.length > 0;
   el("empty").textContent = selection.kind === "invalid"
     ? selection.count > 0 ? selection.label : "Select an image, text layers, or sticky notes to find images."
@@ -170,6 +183,7 @@ async function connect() {
     if (!recordedOpen) { trackUsage("open"); recordedOpen = true; }
     send({ type: "save-connection", endpoint: API, key });
     status("");
+    if (view === "library") void refreshChannels();
   } catch (e) {
     key = "";
     settings(true);
@@ -195,7 +209,7 @@ function resetResults() {
   el("grid").replaceChildren();
 }
 function startSearch() {
-  if (working || !key || selection.kind === "invalid") return;
+  if (view !== "search" || working || !key || selection.kind === "invalid") return;
   clearTimeout(autoSearchTimer);
   pendingAutoSearch = false;
   queryRevision = selectionRevision;
@@ -288,7 +302,7 @@ function watchMore() {
   }
 }
 async function loadMore() {
-  if (!nextPage || pageLoading || previewsLoading || working || pendingAutoSearch) return;
+  if (view !== "search" || !nextPage || pageLoading || previewsLoading || working || pendingAutoSearch) return;
   const id = requestId, revision = selectionRevision, cursor = nextPage;
   const signal = AbortSignal.any([controller!.signal, AbortSignal.timeout(90000)]);
   pageLoading = true;
@@ -427,11 +441,124 @@ el("insert").onclick = async () => {
     status((e as Error).message, true);
   }
 };
+function switchView(next: "search" | "library") {
+  if (uploading || inserting || view === next) return;
+  view = next;
+  controller?.abort();
+  requestId++;
+  working = false;
+  pendingAutoSearch = false;
+  clearTimeout(autoSearchTimer);
+  clearTimeout(channelTimer);
+  resetResults();
+  status("");
+  el("library-view").hidden = view !== "library";
+  el("search-view").hidden = view !== "search";
+  el("search-footer").hidden = view !== "search";
+  el("search-tab").setAttribute("aria-pressed", String(view === "search"));
+  el("library-tab").setAttribute("aria-pressed", String(view === "library"));
+  if (view === "library" && key) void refreshChannels(true);
+  else scheduleSelectionSearch();
+  controls();
+}
+el("search-tab").onclick = () => switchView("search");
+el("library-tab").onclick = () => switchView("library");
+
+async function refreshChannels(wakeServer = false) {
+  clearTimeout(channelTimer);
+  if (!key || view !== "library") return;
+  try {
+    if (wakeServer) await ready();
+    const data = await (await api("/library/channels")).json();
+    if (view !== "library") return;
+    el("channels").replaceChildren();
+    if (!data.channels.length) el("channels").textContent = "No channels added yet.";
+    for (const channel of data.channels) {
+      const row = document.createElement("div");
+      row.style.cssText = "padding:12px 0;border-bottom:1px solid var(--black1)";
+      const title = document.createElement("strong");
+      title.textContent = channel.title;
+      const detail = document.createElement("p");
+      detail.className = "help";
+      const last = channel.last_synced ? new Date(channel.last_synced * 1000).toLocaleString() : "Never";
+      detail.textContent = `Last synced: ${last}`;
+      const state = document.createElement("p");
+      state.className = "help";
+      state.textContent = channel.state === "syncing" ? "Syncing…" : channel.state === "pending" ? "Waiting to sync…" : channel.error || `${channel.added} new images added in the last sync`;
+      row.append(title, detail, state);
+      el("channels").append(row);
+    }
+    el("channel-status").textContent = "";
+    if (data.channels.some((c: {state: string}) => ["pending", "syncing"].includes(c.state)))
+      channelTimer = setTimeout(() => refreshChannels(), 5000);
+  } catch (error) {
+    el("channel-status").textContent = (error as Error).message;
+  }
+}
+el("refresh-channels").onclick = () => refreshChannels(true);
+el("add-channel").onclick = async () => {
+  const input = el<HTMLInputElement>("channel-url");
+  if (!input.value.trim()) { el("channel-status").textContent = "Enter an Are.na channel URL."; return; }
+  el<HTMLButtonElement>("add-channel").disabled = true;
+  el("channel-status").textContent = "Checking channel…";
+  try {
+    await ready();
+    await api("/library/channels", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({url: input.value.trim()})});
+    input.value = "";
+    await refreshChannels();
+  } catch (error) {
+    el("channel-status").textContent = (error as Error).message;
+  } finally { el<HTMLButtonElement>("add-channel").disabled = !key; }
+};
+el("add-images").onclick = async () => {
+  if (uploading || !key || !imageCount) return;
+  uploading = true;
+  uploadAdded = uploadDuplicates = uploadFailed = 0;
+  el("upload-status").textContent = "Preparing upload…";
+  controls();
+  try {
+    await ready();
+    send({type: "upload-start"});
+  } catch (error) {
+    uploading = false;
+    el("upload-status").textContent = (error as Error).message;
+    controls();
+  }
+};
+async function uploadImage(message: {index: number; name: string; bytes: Uint8Array; referenceId?: string; error?: string}) {
+  el("upload-status").textContent = `Adding image ${message.index} of ${uploadTotal}…`;
+  try {
+    if (message.error) throw new Error(message.error);
+    const form = new FormData();
+    form.append("name", message.name.slice(0, 200));
+    form.append("reference_id", message.referenceId || "");
+    form.append("image", new Blob([new Uint8Array(message.bytes)], {type: "image/png"}), "selection.png");
+    const result = await (await api("/library/images", {method: "POST", body: form})).json();
+    if (result.added) uploadAdded++; else uploadDuplicates++;
+  } catch (error) {
+    uploadFailed++;
+    el("upload-status").title = (error as Error).message;
+  }
+  if (!key) finishUpload();
+  else send({type: "upload-next"});
+}
+function finishUpload() {
+  uploading = false;
+  el("upload-status").textContent = `${uploadAdded} added · ${uploadDuplicates} already in library` +
+    (uploadFailed ? ` · ${uploadFailed} failed. ${el("upload-status").title} You can retry the selection; duplicates will be skipped.` : "");
+  controls();
+}
 window.onmessage = (event) => {
   // Figma relays sandbox messages into the iframe; their source is not
   // guaranteed to be window.parent (unlike our browser preview harness).
   const message = event.data?.pluginMessage;
   if (!message || typeof message !== "object") return;
+  if (message.type === "upload-started" && uploading) {
+    uploadTotal = message.total;
+    send({type: "upload-next"});
+  }
+  if (message.type === "upload-image" && uploading) void uploadImage(message);
+  if (message.type === "upload-finished" && uploading) finishUpload();
   if (message.type === "connection") {
     installationId = typeof message.installationId === "string" && /^[a-f0-9-]{36}$/.test(message.installationId)
       ? message.installationId : usageId();
@@ -446,10 +573,11 @@ window.onmessage = (event) => {
   }
   if (message.type === "selection") {
     selection = message.selection;
+    imageCount = message.imageCount ?? (selection.kind === "image" ? 1 : 0);
     selectionRevision++;
     if (!inserting) resetResults();
     scheduleSelectionSearch();
-    if (!working) status("");
+    if (!working && !uploading) status("");
     controls();
   }
   if (message.type === "query" && message.requestId === requestId)

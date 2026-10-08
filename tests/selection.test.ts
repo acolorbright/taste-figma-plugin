@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeSelection, gridPositions } from "../src/shared";
+import { describeSelection, gridPositions, selectedImageNodes } from "../src/shared";
 test("only nonempty text selections and one visible image fill are valid", () => {
   assert.equal(describeSelection([]).kind, "invalid");
   assert.equal(
@@ -83,4 +83,12 @@ test("FigJam sticky notes use their text and ignore empty or hidden notes", () =
   assert.equal(describeSelection([{ ...note, visible: false }]).kind, "invalid");
   assert.equal(describeSelection([{ type: "GROUP", name: "Notes", children: [note] }]).kind, "text");
   assert.equal(describeSelection([note, {type: "TEXT", name: "Caption", characters: "Natural textures"}]).count, 2);
+});
+
+test("library collection handles large selections, containers, hidden layers and duplicates", () => {
+  const images = Array.from({length: 80}, (_, i) => ({id: String(i), name: String(i), type: "RECTANGLE", fills: [{type: "IMAGE", imageHash: String(i)}]}));
+  const group = {id: "group", name: "Group", type: "GROUP", children: images};
+  const hidden = {...images[0], id: "hidden", visible: false};
+  assert.equal(selectedImageNodes([group, images[0], hidden]).length, 80);
+  assert.equal(selectedImageNodes([{...group, visible: false}]).length, 0);
 });

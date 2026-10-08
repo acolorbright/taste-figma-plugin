@@ -1,4 +1,4 @@
-"""Authenticated, read-only search service. No submitted images or text are saved."""
+"""Authenticated search and explicit team library ingestion."""
 
 import asyncio
 import io
@@ -21,10 +21,15 @@ from .search import Encoder, Library, read_image
 from .idle import IdleTimer, TrackActivity
 from .usage import UsageStore
 from .paging import MAX_RESULTS, SearchPages
+from .ingest import IngestStore
 from typing import Literal
 from uuid import UUID
 
 MAX_UPLOAD = 8 * 1024 * 1024
+
+
+class ChannelInput(BaseModel):
+    url: str = Field(min_length=1, max_length=500)
 
 
 class ReferenceQuery(BaseModel):
@@ -52,8 +57,10 @@ class UsageEvent(BaseModel):
     count: int = Field(default=1, ge=1, le=24)
 
 
-def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer=None, usage=None, admin_token=None):
+def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer=None, usage=None, admin_token=None, additions=None):
     pages = SearchPages()
+    store = additions or (IngestStore(os.environ["TASTE_ADDITIONS_PATH"]) if os.environ.get("TASTE_ADDITIONS_PATH") else None)
+    sync_wake = asyncio.Event()
     idle = idle_timer or IdleTimer(float(os.environ.get("TASTE_IDLE_SECONDS", "0")))
     if idle.seconds > 0 and shutdown is None:
         raise RuntimeError("Idle shutdown requires the server.run launcher.")
@@ -77,11 +84,18 @@ def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer
         )
         app.state.encoder = encoder or Encoder()
         app.state.search_gate = asyncio.Semaphore(1)
+        if store:
+            store.restore(app.state.library)
+        sync = asyncio.create_task(store.watch(app.state.library, app.state.encoder, idle, sync_wake)) if store else None
         idle.last_activity = idle.clock()
         watcher = asyncio.create_task(idle.watch(shutdown)) if idle.seconds > 0 else None
         try:
             yield
         finally:
+            if sync:
+                sync.cancel()
+                with suppress(asyncio.CancelledError):
+                    await sync
             if watcher:
                 watcher.cancel()
                 with suppress(asyncio.CancelledError):
@@ -194,6 +208,48 @@ def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer
         ):
             raise HTTPException(401, "Invalid team access key.")
 
+    def require_store():
+        if not store:
+            raise HTTPException(503, "Library additions are not configured on this server.")
+        return store
+
+    @app.get("/library/channels")
+    def channels():
+        return {"channels": require_store().channels(), "sync_hours": 6}
+
+    @app.post("/library/channels")
+    async def add_channel(query: ChannelInput):
+        try:
+            slug = await run_in_threadpool(require_store().add_channel, query.url)
+        except Exception as error:
+            if isinstance(error, HTTPException):
+                raise
+            raise HTTPException(422, str(error) if isinstance(error, ValueError) else "Could not read this Are.na channel. Check the URL and that it is public.")
+        sync_wake.set()
+        return {"slug": slug}
+
+    @app.post("/library/images")
+    async def add_image(image: UploadFile = File(...), name: str = Form(default="Figma image", max_length=200), reference_id: str = Form(default="", max_length=256)):
+        target = require_store()
+        try:
+            data = await image.read(MAX_UPLOAD + 1)
+        finally:
+            await image.close()
+        if not data or len(data) > MAX_UPLOAD:
+            raise HTTPException(413, "Choose an image smaller than 8 MB.")
+        if reference_id and reference_id in app.state.library.indices:
+            return {"id": reference_id, "added": False}
+        try:
+            await asyncio.wait_for(app.state.search_gate.acquire(), timeout=30)
+        except TimeoutError:
+            raise HTTPException(429, "Taste is busy. Please retry the remaining images.")
+        try:
+            return await run_in_threadpool(target.add, data, name, "Team upload", app.state.library, app.state.encoder)
+        except (ValueError, OSError, Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
+            raise HTTPException(422, str(error) if isinstance(error, ValueError) else "This image could not be added.")
+        finally:
+            app.state.search_gate.release()
+
     @app.get("/ready")
     def ready():
         return {"status": "ok"}
@@ -275,8 +331,7 @@ def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer
 
     @app.get("/images/{identity}", dependencies=[Depends(authenticate)])
     def image(identity: str, size: int = Query(default=320, ge=32, le=4096)):
-        file = app.state.library.files.get(identity)
-        if file is None:
+        if identity not in app.state.library.files:
             raise HTTPException(404, "Image not found.")
         try:
             if size == 320:

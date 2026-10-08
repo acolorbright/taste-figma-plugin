@@ -50,6 +50,20 @@ export function selectedTextNodes(
   nodes.forEach(visit);
   return found;
 }
+export function selectedImageNodes<T extends SelectableNode>(nodes: readonly T[]): T[] {
+  const found: T[] = [];
+  const seen = new Set<string | SelectableNode>();
+  function visit(node: SelectableNode) {
+    if (node.visible === false || seen.has(node.id ?? node)) return;
+    seen.add(node.id ?? node);
+    if (Array.isArray(node.fills) && node.fills.some((p: any) => p.type === "IMAGE" && p.visible !== false && p.imageHash))
+      found.push(node as T);
+    else if (textContainers.has(node.type)) node.children?.forEach(visit);
+  }
+  nodes.forEach(visit);
+  return found;
+}
+
 export function describeSelection(
   nodes: readonly SelectableNode[],
 ): SelectionInfo {

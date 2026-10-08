@@ -11,6 +11,7 @@ kill_timeout = 30
   TASTE_CPU_THREADS = "2"
   TASTE_IDLE_SECONDS = "10800"
   TASTE_USAGE_PATH = "/data/usage.sqlite3"
+  TASTE_ADDITIONS_PATH = "/data/library.sqlite3"
 
 [http_service]
   internal_port = 8765

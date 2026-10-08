@@ -275,3 +275,26 @@ test("FigJam sticky selection queries note contents and inserts beside the notes
   assert.equal(h.nodes[0].x, 688);
   assert.equal(h.nodes[0].y, 200);
 });
+
+test("library export captures selection and exports one image per acknowledgement", async () => {
+  const h = host();
+  let exports = 0;
+  const image = (id: string): any => ({id, type: "RECTANGLE", name: id, width: 100, height: 100,
+    fills: [{type: "IMAGE", imageHash: id, scaleMode: "FILL"}],
+    getPluginData: () => "", exportAsync: async () => { exports++; return new Uint8Array([1, 2]); }});
+  h.page.selection = [image("a"), image("b")];
+  await h.send({type: "ready"});
+  assert.equal(h.messages.at(-1).imageCount, 2);
+  await h.send({type: "upload-start"});
+  assert.equal(h.messages.at(-1).total, 2);
+  h.page.selection = [];
+  assert.equal(exports, 0);
+  await h.send({type: "upload-next"});
+  assert.equal(exports, 1);
+  assert.equal(h.messages.at(-1).name, "a");
+  await h.send({type: "upload-next"});
+  assert.equal(exports, 2);
+  assert.equal(h.messages.at(-1).name, "b");
+  await h.send({type: "upload-next"});
+  assert.equal(h.messages.at(-1).type, "upload-finished");
+});

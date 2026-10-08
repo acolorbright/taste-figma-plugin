@@ -39,7 +39,7 @@ class TrackActivity:
         self.timer = timer
 
     async def __call__(self, scope, receive, send):
-        tracked = scope["type"] == "http" and scope["path"] not in ("/ready", "/usage", "/usage/data") and scope["method"] != "OPTIONS"
+        tracked = scope["type"] == "http" and scope["path"] not in ("/ready", "/usage", "/usage/data") and scope["method"] != "OPTIONS" and not (scope["path"] == "/library/channels" and scope["method"] == "GET")
         if not tracked:
             return await self.app(scope, receive, send)
         self.timer.begin()

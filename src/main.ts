@@ -1,16 +1,20 @@
 import {
   describeSelection,
   selectedTextNodes,
+  selectedImageNodes,
   gridPositions,
   type InsertImage,
 } from "./shared";
 figma.showUI(__html__, { width: 660, height: 680, themeColors: true });
 let anchor: { page: PageNode; x: number; y: number } | null = null;
 let busy = false;
+let uploadNodes: SceneNode[] = [];
+let uploadIndex = 0;
 function selection() {
   figma.ui.postMessage({
     type: "selection",
     selection: describeSelection(figma.currentPage.selection),
+    imageCount: selectedImageNodes(figma.currentPage.selection).length,
   });
 }
 figma.on("selectionchange", selection);
@@ -62,6 +66,37 @@ figma.ui.onmessage = async (message) => {
     }
     if (message.type === "ready") {
       selection();
+      return;
+    }
+    if (message.type === "upload-start") {
+      uploadNodes = selectedImageNodes([...figma.currentPage.selection]);
+      uploadIndex = 0;
+      figma.ui.postMessage({ type: "upload-started", total: uploadNodes.length });
+      return;
+    }
+    if (message.type === "upload-next") {
+      const node = uploadNodes[uploadIndex++];
+      if (!node) {
+        uploadNodes = [];
+        figma.ui.postMessage({ type: "upload-finished" });
+        return;
+      }
+      try {
+        if (node.removed) throw new Error("Layer was removed.");
+        const bytes = await node.exportAsync({ format: "PNG", constraint: {
+          type: "SCALE", value: Math.min(1, 2048 / Math.max(node.width, node.height)),
+        }});
+        if (bytes.length > 8 * 1024 * 1024) throw new Error("Image exceeds 8 MB.");
+        const paints = "fills" in node && Array.isArray(node.fills) ? node.fills : [];
+        const unchanged = paints.length === 1 && paints[0].type === "IMAGE" && paints[0].scaleMode === "FIT" &&
+          paints[0].imageHash === node.getPluginData("tasteImageHash") &&
+          "rotation" in node && node.rotation === 0 && "effects" in node && node.effects.length === 0;
+        figma.ui.postMessage({ type: "upload-image", index: uploadIndex, name: node.name, bytes,
+          referenceId: unchanged ? node.getPluginData("tasteReferenceId") : "" });
+      } catch (error) {
+        figma.ui.postMessage({ type: "upload-image", index: uploadIndex, name: node.name,
+          error: error instanceof Error ? error.message : "Could not export this image." });
+      }
       return;
     }
     if (message.type === "query") {

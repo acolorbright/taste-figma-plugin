@@ -26,9 +26,18 @@ After a quiet period, Taste wakes up automatically. The plugin shows a small ani
 
 Images are placed directly on the canvas. Inserting one image selects it and starts a new similarity search, excluding that same Taste reference.
 
+## Add images to the shared library
+
+Open **Add to library** in the plugin:
+
+- Select any number of image layers in Figma or FigJam, then click **Add XX selected images to library**. Images inside selected groups/frames are included. Uploads run one at a time and become searchable immediately. Repeating an upload skips identical images; unchanged Taste references are also skipped. If an image fails, the rest continue and the summary lets you retry safely.
+- Paste a public **Are.na channel URL** and click **Add channel**. Everyone with the team key sees the same channel list, last successful sync, and any import errors. Added channels sync immediately, on server wake, and every six hours while the server remains awake. Sleeping servers are not woken just to sync. Channel images are added incrementally; removing a block from Are.na does not remove it from Taste.
+
+Explicit additions are stored for the team, including the image layer name. Images are flattened as they appear, scaled to at most 2048 pixels, and stored as JPEGs. This does not change the original Figma layers. The original imported library has no reliable channel URL registry, so it does not prepopulate the channel list; add the channels you want to follow.
+
 ## Usage tracking
 
-The plugin records anonymous usage counts: opens, successful and failed searches, and images inserted. It uses a random installation ID saved on your device. It does not collect your Figma identity, file names, search text, or image contents.
+The plugin records anonymous usage counts: opens, successful and failed searches, and images inserted. It uses a random installation ID saved on your device. Usage tracking does not collect your Figma identity, file names, search text, or image contents. The separate Add to library action explicitly stores the submitted images and layer names.
 
 ## Update the plugin
 
@@ -39,7 +48,7 @@ Close the plugin, [download the latest ZIP](https://github.com/acolorbright/tast
 - **Plugin doesn't appear:** use the desktop app and import `manifest.json`, not the ZIP.
 - **Access key not accepted:** ask Sven for the current team key and reconnect.
 - **Cannot reach Taste:** check your internet connection; if it persists, let Sven know.
-- **No search starts:** select one image, or text/sticky notes containing words. Multiple images and mixed image/text selections aren't supported.
+- **No search starts:** select one image, or text/sticky notes containing words. Search accepts one image at a time; use Add to library for multiple images.
 
 ---
 
@@ -47,7 +56,7 @@ Close the plugin, [download the latest ZIP](https://github.com/acolorbright/tast
 
 The default build connects to the team's hosted Fly.io service. The sections below are for maintaining the plugin; colleagues installing it can stop here.
 
-Search uses **OpenCLIP ViT-B-32, OpenAI weights, 512 dimensions**, matching the original Taste library. It does not use Taste Web's separate OpenAI text-embedding index. The hosted service uses a CLIP index snapshot and existing Vercel Blob image URLs.
+Search uses **OpenCLIP ViT-B-32, OpenAI weights, 512 dimensions**, matching the original Taste library. It does not use Taste Web's separate OpenAI text-embedding index. The hosted service combines a base CLIP snapshot and existing Vercel Blob URLs with persistent team additions stored on the Fly volume.
 
 ## Run locally
 
@@ -65,7 +74,7 @@ The first launch may download CLIP model weights. The service binds to `127.0.0.
 
 The default plugin build now connects to the hosted Fly service. For local development, build with `TASTE_API_URL=http://localhost:8765 npm run package`.
 
-Images are exported as seen, including crops and transforms. Mixed text/image selections and multiple images are deliberately rejected. Text layers are combined into a token-weighted CLIP query; long text is split into chunks so later words are not silently discarded. For best results use descriptive English phrases; CLIP is a visual matching model rather than a reasoning model.
+Images are exported as seen, including crops and transforms. Search rejects mixed text/image selections and multiple images; library uploads collect image-filled layers from any selection. Text layers are combined into a token-weighted CLIP query; long text is split into chunks so later words are not silently discarded. For best results use descriptive English phrases; CLIP is a visual matching model rather than a reasoning model.
 
 Results are placed directly on the current page as image layers, beside the source’s containing frame. This avoids hiding new images inside clipped frames or changing auto-layout. Images use a three-column grid, 320 px wide, with original proportions. Inserted images become selected; a single inserted image automatically starts a similarity search. Original selection layers are left in place. Switching pages before insertion requires returning to the original page or searching again.
 
@@ -100,7 +109,7 @@ docker run --rm -p 127.0.0.1:8765:8765 \
 
 Provide HTTPS through your existing reverse proxy. Keep one worker per container to avoid loading duplicate models. Allow up to 90 seconds for searches, configure request limits at the proxy, and keep this service private to the team. The service queues simultaneous inference requests for up to 10 seconds, then returns HTTP 429 if it is still busy. Restart it after updating the library index.
 
-The shared bearer key grants access to the full reference library. Rotate `TASTE_API_TOKEN` to revoke it. This first version does not implement individual user accounts, SSO, or per-user revocation. Uploaded selection images/text are processed in memory and not persisted or sent to third-party inference APIs. Authenticated downloads are re-encoded JPEGs, with a 4096-pixel maximum; GIF references use their first frame and transparent images use a white background.
+The shared bearer key grants access to the full reference library and permission to add images and public Are.na channels. Rotate `TASTE_API_TOKEN` to revoke it. This first version does not implement individual user accounts, SSO, or per-user revocation. Search queries are processed in memory and not persisted or sent to third-party inference APIs. Explicit library additions are persisted, with CLIP inference on the same server. Authenticated downloads are re-encoded JPEGs, with a 4096-pixel maximum; GIF references use their first frame and transparent images use a white background.
 
 ## Development and verification
 
@@ -140,9 +149,15 @@ TASTE_API_URL=https://taste-figma-search.fly.dev npm run package
 ```
 
 The export reads Taste Web's `.env.local` only to query image URLs. It writes ignored
-`deploy-data/` files. New images require an updated local CLIP index, an uploaded
-image in Taste Web, and another export/deploy. This pilot does not synchronize
-library changes automatically.
+`deploy-data/` files. Refreshing this original Taste Web snapshot still requires an export/deploy.
+Plugin uploads and registered Are.na channels use `TASTE_ADDITIONS_PATH=/data/library.sqlite3`
+and do not require deployment. The SQLite database stores images, vectors, channel settings,
+and sync timestamps atomically; additions are restored into the search index on restart.
+They are not automatically copied back into Taste Web. Keep this database in volume backups
+alongside usage data. The existing 1 GB volume has a 100 MB free-space reserve; expand it
+when needed. Are.na imports use the public v2 API and only approved Are.na image hosts,
+with bounded downloads and no redirects. Failed images retry at the next sync.
+For local ingestion, set `TASTE_ADDITIONS_PATH` to a writable SQLite file when launching the server.
 
 The hosted team key is in `.taste-fly-access-key` (owner-readable only, ignored by
 Git). It is stored as Fly secret `TASTE_API_TOKEN`, never bundled in the plugin.
@@ -160,7 +175,7 @@ pilot can be interrupted by a restart/deploy; it is not a highly available setup
 completed authenticated request. Searches, image downloads, and connecting the
 plugin count as activity; `/ready` probes, CORS preflights, and rejected credentials
 do not. Active requests finish before the idle timer can expire. An open plugin
-makes no background keepalive requests.
+makes no background keepalive requests. Channel status polling only runs while a sync is pending or active and does not extend the idle window; background sync work finishes before shutdown without resetting that window.
 
 The application asks Uvicorn to exit cleanly. Fly's `on-failure` restart policy
 leaves it stopped; `auto_start_machines=true` wakes it on the next request.

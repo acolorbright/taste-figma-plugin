@@ -33,6 +33,7 @@
       button {
         cursor: default;
       }
+      nav button[aria-pressed="true"] { background: var(--hover-fill); font-weight: 600; }
       button:focus-visible,
       .card:focus-within {
         outline: 2px solid var(--figma-color-border-selected, #0d99ff);
@@ -211,6 +212,10 @@
     </style>
   </head>
   <body>
+    <nav aria-label="Plugin views" style="display:flex;gap:8px;padding:8px 16px;border-bottom:1px solid var(--black1)">
+      <button id="search-tab" class="button button--tertiary" aria-pressed="true">Search</button>
+      <button id="library-tab" class="button button--tertiary" aria-pressed="false">Add to library</button>
+    </nav>
     <main id="scroll-area">
       <section id="settings" hidden>
         <label class="field-label" for="token">Team access key</label>
@@ -225,7 +230,7 @@
         </div>
         <p class="help">Service: <span id="endpoint"></span></p>
         <p class="help">Saved on this device for future use.</p>
-        <p class="help">Anonymous usage counts help us understand team adoption. Search text and image contents are not stored.</p>
+        <p class="help">Anonymous usage counts help us understand team adoption. Search text and query images are not stored. Images you explicitly add to the library are saved for the team.</p>
         <button id="connect" class="button button--secondary">Connect</button>
       </section>
       <div id="status" role="status" aria-live="polite"></div>
@@ -235,11 +240,29 @@
         <p class="help">The server sleeps when idle. Waking up can take a little while.</p>
         <p id="startup-message" class="help" role="status" aria-live="polite"></p>
       </section>
+      <section id="library-view" hidden>
+        <h2>Selected images</h2>
+        <p class="help">Add images to the shared team library. They become searchable as each upload finishes.</p>
+        <button id="add-images" class="button button--primary" style="margin-top:12px" disabled>Add 0 selected images to library</button>
+        <p id="upload-status" class="help" role="status" aria-live="polite"></p>
+        <h2 style="margin-top:32px">Are.na channels</h2>
+        <p class="help">Syncs on server wake and every 6 hours while awake. Only new images are imported.</p>
+        <div id="channels" style="margin:16px 0"></div>
+        <label class="field-label" for="channel-url">Public channel URL</label>
+        <div style="display:flex;gap:8px">
+          <div class="input" style="flex:1"><input id="channel-url" class="input__field" placeholder="https://www.are.na/…" /></div>
+          <button id="add-channel" class="button button--secondary">Add channel</button>
+        </div>
+        <p id="channel-status" class="help" role="status" aria-live="polite"></p>
+        <button id="refresh-channels" class="button button--tertiary" style="margin-top:8px">Refresh status</button>
+      </section>
+      <section id="search-view">
       <div id="grid" class="grid" aria-label="Image results"></div>
       <button id="more" class="button button--secondary" style="margin:16px auto" hidden>Load more</button>
       <div id="empty" class="empty">Select an image, text layers, or sticky notes to find images.</div>
+      </section>
     </main>
-    <footer>
+    <footer id="search-footer">
       <div><span id="selection-count" aria-live="polite">0 selected</span><span id="plugin-version">v<!-- VERSION --></span></div>
       <div class="footer-actions">
       <button id="clear" class="button button--tertiary" disabled>Cancel selection</button>

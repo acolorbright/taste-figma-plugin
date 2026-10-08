@@ -380,3 +380,114 @@ def test_paging_stops_after_ten_pages():
         page = pages.page(**{'identity': page['next']['search_id'], 'offset': page['next']['offset']})
     assert count == 10
     assert results == list(range(240))
+
+
+def test_team_upload_is_searchable_deduplicated_and_survives_restart(library, tmp_path):
+    from server.ingest import IngestStore
+    store = IngestStore(tmp_path / "additions.sqlite3")
+    data = io.BytesIO()
+    Image.new("RGB", (48, 24), "purple").save(data, "PNG")
+    payload = {"image": ("selection.png", data.getvalue(), "image/png")}
+    with TestClient(create_app(library, Encoder(), KEY, additions=store)) as client:
+        assert client.post("/library/images", files=payload).status_code == 401
+        result = client.post("/library/images", headers=AUTH, files=payload, data={"name": "Team image"}).json()
+        assert result["added"] is True
+        identity = result["id"]
+        assert client.post("/library/images", headers=AUTH, files=payload).json() == {"id": identity, "added": False}
+        assert client.get("/health", headers=AUTH).json()["count"] == 3
+        assert identity in [r["id"] for r in client.post("/search/text", headers=AUTH, json={"texts": ["purple"]}).json()["results"]]
+        assert client.get(f"/images/{identity}", headers=AUTH).status_code == 200
+        assert client.post("/library/images", headers=AUTH, files={"image": ("bad", b"bad")}).status_code == 422
+        assert client.post("/library/images", headers=AUTH, files=payload, data={"reference_id": "one"}).json() == {"id": "one", "added": False}
+    restored = Library(tmp_path)
+    with TestClient(create_app(restored, Encoder(), KEY, additions=IngestStore(store.path))) as client:
+        assert client.get("/health", headers=AUTH).json()["count"] == 3
+        assert client.get(f"/images/{identity}?size=4096", headers=AUTH).status_code == 200
+
+
+def test_channel_validation_and_download_boundaries():
+    from server.ingest import channel_slug, fetch
+    assert channel_slug("https://www.are.na/person/my-channel/") == "my-channel"
+    assert channel_slug("my-channel") == "my-channel"
+    for value in ["http://127.0.0.1/x", "https://example.com/a/b", "https://www.are.na/block/123", "../secret", "x?per=2", "https://evil@are.na/x/y"]:
+        with pytest.raises(ValueError):
+            channel_slug(value)
+    for url in ["http://images.are.na/x", "https://127.0.0.1/x", "https://images.are.na.evil.com/x", "https://images.are.na:444/x"]:
+        with pytest.raises(ValueError):
+            fetch(url, image=True)
+
+
+def test_channel_sync_incremental_shared_and_failure_visible(library, tmp_path, monkeypatch):
+    import asyncio
+    import server.ingest as ingest
+    store = ingest.IngestStore(tmp_path / "additions.sqlite3")
+    store.restore(library)
+    data = io.BytesIO()
+    Image.new("RGB", (12, 12), "green").save(data, "PNG")
+    block = {"id": 99, "class": "Image", "title": "Green", "image": {"display": {"url": "https://images.are.na/image"}}}
+    downloads = []
+    def fetched(url, image=False):
+        if image:
+            downloads.append(url)
+            return data.getvalue()
+        return {"base_class": "Channel", "slug": "channel", "title": "Test channel", "status": "public", "length": 1, "contents": [block]}
+    monkeypatch.setattr(ingest, "fetch", fetched)
+    assert store.add_channel("channel") == "channel"
+    store.add_channel("channel")
+    assert len(store.channels()) == 1
+    asyncio.run(store.sync_channel("channel", library, Encoder()))
+    row = store.channels()[0]
+    assert row["state"] == "synced" and row["last_synced"] and row["added"] == 1
+    asyncio.run(store.sync_channel("channel", library, Encoder()))
+    assert len(downloads) == 1
+    assert store.channels()[0]["added"] == 0
+    last_synced = store.channels()[0]["last_synced"]
+    def failed(*args):
+        raise OSError("offline")
+    monkeypatch.setattr(ingest, "fetch", failed)
+    asyncio.run(store.sync_channel("channel", library, Encoder()))
+    assert store.channels()[0]["state"] == "error"
+    assert store.channels()[0]["last_synced"] == last_synced
+
+
+def test_channel_routes_require_team_key(client):
+    assert client.get("/library/channels").status_code == 401
+    assert client.post("/library/channels", json={"url": "channel"}).status_code == 401
+    assert client.get("/library/channels", headers=AUTH).status_code == 503
+
+
+def test_sync_schedule_does_not_extend_idle_and_obeys_six_hours(library, tmp_path, monkeypatch):
+    import asyncio
+    import server.ingest as ingest
+    from server.idle import IdleTimer
+    store = ingest.IngestStore(tmp_path / "additions.sqlite3")
+    with store.db() as db:
+        db.execute("INSERT INTO channels (slug,title,state,last_attempt) VALUES ('a','A','synced',1000)")
+    now = [1000.0]
+    monkeypatch.setattr(ingest.time, "time", lambda: now[0])
+    idle = IdleTimer(10800, clock=lambda: 50)
+    calls = []
+    async def sync(slug, *args):
+        assert idle.active == 1
+        calls.append(slug)
+        store.update_channel(slug, state="synced", last_attempt=now[0])
+    monkeypatch.setattr(store, "sync_channel", sync)
+    async def check():
+        wake = asyncio.Event()
+        task = asyncio.create_task(store.watch(library, Encoder(), idle, wake))
+        await asyncio.sleep(.01)
+        assert calls == ['a']  # Every wake, even if last synced recently.
+        wake.set()
+        await asyncio.sleep(.01)
+        assert calls == ['a']
+        now[0] += ingest.SYNC_SECONDS
+        wake.set()
+        await asyncio.sleep(.01)
+        assert calls == ['a', 'a']
+        assert idle.last_activity == 50 and idle.active == 0
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    asyncio.run(check())

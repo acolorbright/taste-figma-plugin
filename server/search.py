@@ -44,6 +44,9 @@ def _decode_image(data):
 
 class Library:
     def __init__(self, root):
+        self.lock = threading.RLock()
+        self.additions = None
+        self.arena_ids = set()
         self.root = Path(root).resolve()
         embeddings = json.loads((self.root / "embeddings.json").read_text())
         refs = json.loads((self.root / "references.json").read_text())
@@ -68,6 +71,8 @@ class Library:
             )
             if identity in self.files:
                 raise ValueError("Duplicate reference ID in library.")
+            if ref.get("arenaBlockId"):
+                self.arena_ids.add(str(ref["arenaBlockId"]))
             vectors.append(normalize(embeddings[ref["file"]]))
             self.refs.append(
                 {
@@ -84,7 +89,18 @@ class Library:
         self.matrix = np.stack(vectors)
         self.indices = {ref["id"]: i for i, ref in enumerate(self.refs)}
 
+    def add(self, identity, name, source, vector):
+        with self.lock:
+            if identity in self.indices:
+                return
+            self.matrix = np.vstack((self.matrix, normalize(vector)))
+            self.indices[identity] = len(self.refs)
+            self.refs.append({"id": identity, "name": name, "cluster": source})
+            self.files[identity] = None
+
     def image_bytes(self, identity):
+        if self.files.get(identity) is None and self.additions:
+            return self.additions.image_bytes(identity)
         if identity in self.urls:
             with urlopen(self.urls[identity], timeout=20) as response:
                 data = response.read(20 * 1024 * 1024 + 1)
@@ -94,13 +110,16 @@ class Library:
         return self.files[identity].read_bytes()
 
     def reference_vector(self, identity):
-        return self.matrix[self.indices[identity]]
+        with self.lock:
+            return self.matrix[self.indices[identity]]
 
     def rank(self, vector, limit=24, exclude_id=None):
-        scores = self.matrix @ normalize(vector)
-        indices = [i for i in np.argsort(-scores, kind="stable")
-                   if self.refs[i]["id"] != exclude_id][:limit]
-        return [{**self.refs[i], "score": float(scores[i])} for i in indices]
+        with self.lock:
+            scores = self.matrix @ normalize(vector)
+            indices = [i for i in np.argsort(-scores, kind="stable")
+                       if self.refs[i]["id"] != exclude_id][:limit]
+            return [{**self.refs[i], "score": float(scores[i])} for i in indices]
+
 
 
 class Encoder:

@@ -68,7 +68,7 @@ await writeFile(
         allowedDomains: local ? ["none"] : [url.origin],
         devAllowedDomains: local ? [url.origin] : ["http://localhost:8765"],
         reasoning:
-          "Search the private Taste reference library and download selected images.",
+          "Search the private Taste library, download references, and explicitly add selected images or public Are.na channels.",
       },
     },
     null,
@@ -83,6 +83,7 @@ await writeFile("dist/SETUP.txt", `Taste — image search
 4. Run Taste — image search and enter the team access key supplied separately.
    The key is remembered on this device.
 5. Select an image, text layers, or FigJam sticky notes to search automatically. Select results and insert.
+6. Use Add to library to upload selected images or subscribe the team to public Are.na channels.
 
 Service: ${url.origin}
 ${local ? "This build requires the local Taste service." : "No local server or image library is needed."}
