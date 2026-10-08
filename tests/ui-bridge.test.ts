@@ -443,3 +443,24 @@ test("library view suppresses search and uploads a selection progressively", asy
   assert.match(p.element("upload-status").textContent, /1 added.*1 failed/);
   assert.equal(p.element("search-tab").disabled, false);
 });
+
+test("channel names link to Are.na and Sync now queues only that channel", async () => {
+  let state = "synced";
+  const p = panel(async (url, init) => {
+    if (url.endsWith("/moods/sync")) state = "pending";
+    return {ok: true, json: async () => url.endsWith("/library/channels") ? {channels: [{slug: "moods", title: "Moods", url: "https://www.are.na/sven/moods", state, last_synced: 100, added: 2}]} : {}};
+  });
+  p.element("token").value = "test-key";
+  await p.element("connect").onclick();
+  p.element("library-tab").click();
+  await new Promise(resolve => setImmediate(resolve));
+  let heading = p.element("channels").children[0].children[0];
+  assert.equal(heading.children[0].href, "https://www.are.na/sven/moods");
+  assert.equal(heading.children[0].target, "_blank");
+  assert.equal(heading.children[1].textContent, "Sync now");
+  await heading.children[1].onclick();
+  assert.equal(p.requests.filter(r => r.url.endsWith('/moods/sync') && r.init.method === 'POST').length, 1);
+  heading = p.element("channels").children[0].children[0];
+  assert.equal(heading.children[1].textContent, "Queued…");
+  assert.equal(heading.children[1].disabled, true);
+});

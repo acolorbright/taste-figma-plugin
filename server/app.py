@@ -228,6 +228,15 @@ def create_app(library=None, encoder=None, token=None, shutdown=None, idle_timer
         sync_wake.set()
         return {"slug": slug}
 
+    @app.post("/library/channels/{slug}/sync", status_code=202)
+    async def sync_channel(slug: str):
+        try:
+            state = await run_in_threadpool(require_store().request_sync, slug)
+        except KeyError:
+            raise HTTPException(404, "Channel not found.")
+        sync_wake.set()
+        return {"state": state}
+
     @app.post("/library/images")
     async def add_image(image: UploadFile = File(...), name: str = Form(default="Figma image", max_length=200), reference_id: str = Form(default="", max_length=256)):
         target = require_store()

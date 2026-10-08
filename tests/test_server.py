@@ -491,3 +491,39 @@ def test_sync_schedule_does_not_extend_idle_and_obeys_six_hours(library, tmp_pat
         except asyncio.CancelledError:
             pass
     asyncio.run(check())
+
+
+def test_manual_channel_sync_is_authenticated_idempotent_and_preserves_history(library, tmp_path, monkeypatch):
+    import asyncio
+    from server.ingest import IngestStore
+    store = IngestStore(tmp_path / 'additions.sqlite3')
+    with store.db() as db:
+        db.execute("INSERT INTO channels (slug,title,state,last_synced,last_attempt,error) VALUES ('moods','Moods','error',100,200,'offline')")
+    async def paused(*args):
+        await asyncio.Event().wait()
+    monkeypatch.setattr(store, 'watch', paused)
+    with TestClient(create_app(library, Encoder(), KEY, additions=store)) as client:
+        path = '/library/channels/moods/sync'
+        assert client.post(path).status_code == 401
+        response = client.post(path, headers=AUTH)
+        assert response.status_code == 202 and response.json()['state'] == 'pending'
+        row = store.channels()[0]
+        assert row['last_synced'] == 100 and row['error'] == ''
+        assert client.post(path, headers=AUTH).json()['state'] == 'pending'
+        store.update_channel('moods', state='syncing')
+        assert client.post(path, headers=AUTH).json()['state'] == 'syncing'
+        assert client.post('/library/channels/missing/sync', headers=AUTH).status_code == 404
+    assert IngestStore.channel_url({'slug': 'moods', 'user': {'slug': 'sven'}}) == 'https://www.are.na/sven/moods'
+
+
+def test_channel_url_migration_preserves_existing_channels(tmp_path):
+    import sqlite3
+    from server.ingest import IngestStore
+    path = tmp_path / 'legacy.sqlite3'
+    with sqlite3.connect(path) as db:
+        db.execute("CREATE TABLE channels (slug TEXT PRIMARY KEY,title TEXT,last_synced REAL,last_attempt REAL,state TEXT,error TEXT,added INTEGER)")
+        db.execute("INSERT INTO channels VALUES ('moods','Moods',100,100,'synced','',42)")
+    store = IngestStore(path)
+    assert store.channels()[0]['last_synced'] == 100
+    assert store.channels()[0]['added'] == 42
+    assert store.channels()[0]['url'] == ''

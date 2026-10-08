@@ -476,8 +476,33 @@ async function refreshChannels(wakeServer = false) {
     for (const channel of data.channels) {
       const row = document.createElement("div");
       row.style.cssText = "padding:12px 0;border-bottom:1px solid var(--black1)";
-      const title = document.createElement("strong");
+      const heading = document.createElement("div");
+      heading.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:16px";
+      const title = document.createElement("a");
       title.textContent = channel.title;
+      const url = new URL(channel.url || `https://www.are.na/channel/${encodeURIComponent(channel.slug)}`);
+      if (url.protocol === "https:" && url.hostname === "www.are.na") title.href = url.href;
+      title.target = "_blank";
+      title.rel = "noopener noreferrer";
+      title.style.cssText = "color:var(--figma-color-text-brand,#0d99ff);font-weight:600;overflow-wrap:anywhere";
+      const sync = document.createElement("button");
+      sync.className = "button button--secondary";
+      sync.textContent = channel.state === "syncing" ? "Syncing…" : channel.state === "pending" ? "Queued…" : "Sync now";
+      sync.disabled = ["pending", "syncing"].includes(channel.state);
+      sync.onclick = async () => {
+        sync.disabled = true;
+        sync.textContent = "Queuing…";
+        try {
+          await ready();
+          await api(`/library/channels/${encodeURIComponent(channel.slug)}/sync`, {method: "POST"});
+          await refreshChannels();
+        } catch (error) {
+          el("channel-status").textContent = (error as Error).message;
+          sync.disabled = false;
+          sync.textContent = "Sync now";
+        }
+      };
+      heading.append(title, sync);
       const detail = document.createElement("p");
       detail.className = "help";
       const last = channel.last_synced ? new Date(channel.last_synced * 1000).toLocaleString() : "Never";
@@ -485,7 +510,7 @@ async function refreshChannels(wakeServer = false) {
       const state = document.createElement("p");
       state.className = "help";
       state.textContent = channel.state === "syncing" ? "Syncing…" : channel.state === "pending" ? "Waiting to sync…" : channel.error || `${channel.added} new images added in the last sync`;
-      row.append(title, detail, state);
+      row.append(heading, detail, state);
       el("channels").append(row);
     }
     el("channel-status").textContent = "";

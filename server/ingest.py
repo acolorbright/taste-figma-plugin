@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 from contextlib import contextmanager
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 from .search import read_image
@@ -70,6 +70,8 @@ class IngestStore:
                 );
                 UPDATE channels SET state='pending' WHERE state='syncing';
             ''')
+            if 'url' not in {row['name'] for row in db.execute('PRAGMA table_info(channels)')}:
+                db.execute("ALTER TABLE channels ADD COLUMN url TEXT NOT NULL DEFAULT ''")
 
     @contextmanager
     def db(self):
@@ -130,6 +132,21 @@ class IngestStore:
         with self.db() as db:
             return [dict(row) for row in db.execute("SELECT * FROM channels ORDER BY title COLLATE NOCASE")]
 
+    @staticmethod
+    def channel_url(data):
+        owner = (data.get("user") or {}).get("slug") or "channel"
+        return f"https://www.are.na/{quote(str(owner), safe='')}/{quote(data['slug'], safe='')}"
+
+    def request_sync(self, slug):
+        with self.db() as db:
+            row = db.execute("SELECT state FROM channels WHERE slug=?", (slug,)).fetchone()
+            if row is None:
+                raise KeyError(slug)
+            if row["state"] not in ("pending", "syncing"):
+                db.execute("UPDATE channels SET state='pending',error='' WHERE slug=?", (slug,))
+                return "pending"
+            return row["state"]
+
     def add_channel(self, value):
         slug = channel_slug(value)
         data = fetch(f"https://api.are.na/v2/channels/{slug}?per=1")
@@ -138,6 +155,7 @@ class IngestStore:
         slug = channel_slug(data["slug"])
         with self.db() as db:
             db.execute("INSERT OR IGNORE INTO channels (slug,title) VALUES (?,?)", (slug, str(data.get("title") or slug)[:200]))
+            db.execute("UPDATE channels SET url=? WHERE slug=?", (self.channel_url(data), slug))
         return slug
 
     def update_channel(self, slug, **fields):
@@ -152,6 +170,8 @@ class IngestStore:
             page = 1
             while True:
                 data = await asyncio.to_thread(fetch, f"https://api.are.na/v2/channels/{slug}?page={page}&per=100")
+                if page == 1:
+                    self.update_channel(slug, url=self.channel_url(data))
                 for block in data.get("contents", []):
                     if block.get("class") != "Image" or not block.get("image") or self.has_block(block["id"], library):
                         continue
